@@ -4,6 +4,8 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import pandas as pd
 from datetime import datetime, timedelta
+from scipy.signal import argrelextrema
+import numpy as np
 import io
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, MessageHandler, filters, ContextTypes, CallbackQueryHandler, CommandHandler
@@ -172,7 +174,65 @@ async def create_chart(pool_id, symbol, timeframe="hour", aggregate="1"):
        start_idx = 80
        ax.plot(timestamps_for_ema[start_idx:], df['ema_200'][start_idx:], color='#42a5f5', linewidth=2, alpha=0.8, label='EMA 200')
 
+   # ═══════════════════════════════════════════════════════════════════════════
+   # 📊 SUPPLY/DEMAND ZONES DETECTION
+   # ═══════════════════════════════════════════════════════════════════════════
+   
+   swing_length = 15
+   zone_width = 0.3
+   
+   # Dynamic zone width based on timeframe
+   if timeframe == "minute":
+       zone_width = 0.5  # 0.3 → 0.5
+   elif timeframe == "hour":
+       zone_width = 1.5  # 1.0 → 1.5
+   else:  # day
+       zone_width = 2.0  # 1.5 → 2.0
+
+   # این رو بذار:
+   if timeframe == "minute":
+       zone_duration_hours = int(aggregate) * 4  # 2 → 4
+   elif timeframe == "hour":
+       zone_duration_hours = int(aggregate) * 20  # 12 → 20
+   else:  # day
+       zone_duration_hours = int(aggregate) * 24 * 5  # 3 → 5
+   
+   half_duration = zone_duration_hours // 2
+   
+   if len(df) > swing_length * 2:  # Enough data for pivot detection
+       highs = df['high'].values
+       lows = df['low'].values
+       
+       # Find swing highs and lows
+       high_peaks = argrelextrema(highs, np.greater, order=swing_length//2)[0]
+       low_peaks = argrelextrema(lows, np.less, order=swing_length//2)[0]
+       
+       # Draw Supply Zones (resistance)
+       for peak_idx in high_peaks[-4:]:  # Last 4 supply zones
+           if peak_idx < len(df):
+               zone_top = df.iloc[peak_idx]['high']
+               zone_bottom = zone_top * (1 - zone_width / 100)
+               peak_time = timestamps_for_ema[peak_idx]
+               
+               # Draw zone rectangle
+               rect = patches.Rectangle((peak_time - timedelta(hours=half_duration), zone_bottom),
+                                      timedelta(hours=zone_duration_hours), zone_top - zone_bottom,
+                                      facecolor='red', alpha=0.25, edgecolor='red', linewidth=1)
+               ax.add_patch(rect)
         
+       # Draw Demand Zones (support)
+       for peak_idx in low_peaks[-4:]:  # Last 4 demand zones
+           if peak_idx < len(df):
+               zone_bottom = df.iloc[peak_idx]['low']
+               zone_top = zone_bottom * (1 + zone_width / 100)
+               peak_time = timestamps_for_ema[peak_idx]
+               
+               # Draw zone rectangle
+               rect = patches.Rectangle((peak_time - timedelta(hours=half_duration), zone_bottom),
+                                      timedelta(hours=zone_duration_hours), zone_top - zone_bottom,
+                                      facecolor='green', alpha=0.25, edgecolor='green', linewidth=1)
+               ax.add_patch(rect)
+
    # Styling  
    ax.grid(True, alpha=0.3, color='#333333')
    timeframe_label = f"{aggregate}{timeframe[0].upper()}" if aggregate != "1" else timeframe.title()

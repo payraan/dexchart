@@ -2,7 +2,7 @@ import asyncio
 import httpx
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
-from datetime import datetime
+from datetime import datetime, timedelta
 import io
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, MessageHandler, filters, ContextTypes, CallbackQueryHandler
@@ -40,7 +40,7 @@ async def get_geckoterminal_ohlcv(pool_id, timeframe="hour", aggregate="1"):
     network, pool_address = pool_id.split('_')
     url = f"https://api.geckoterminal.com/api/v2/networks/{network}/pools/{pool_address}/ohlcv/{timeframe}"
     
-    limits = {"minute": 48, "hour": 24, "day": 30}
+    limits = {"minute": 300, "hour": 240, "day": 90}
     params = {
         'aggregate': aggregate,
         'limit': str(limits.get(timeframe, 24))
@@ -53,70 +53,119 @@ async def get_geckoterminal_ohlcv(pool_id, timeframe="hour", aggregate="1"):
             return data.get('data', {}).get('attributes', {}).get('ohlcv_list', [])
     return None
 
+async def get_realtime_price(pool_id):
+    """Get real-time price from GeckoTerminal"""
+    network, pool_address = pool_id.split('_')
+    url = f"https://api.geckoterminal.com/api/v2/networks/{network}/pools/{pool_address}"
+    
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url)
+        if response.status_code == 200:
+            data = response.json()
+            pool_data = data.get('data', {})
+            attributes = pool_data.get('attributes', {})
+            return float(attributes.get('base_token_price_usd', 0))
+    return None
+
 async def create_chart(pool_id, symbol, timeframe="hour", aggregate="1"):
-    """Create candlestick chart from GeckoTerminal data"""
-    ohlcv_list = await get_geckoterminal_ohlcv(pool_id, timeframe, aggregate)
-    
-    if not ohlcv_list:
-        return None
-    
-    plt.style.use('dark_background')
-    fig, ax = plt.subplots(figsize=(12, 8))
-    fig.patch.set_facecolor('#1a1a1a')
-    ax.set_facecolor('#1a1a1a')
-    
-    for i, candle in enumerate(ohlcv_list):
-        timestamp, open_price, high, low, close, volume = candle
-        color = '#00ff88' if close >= open_price else '#ff4444'
-        body_height = abs(close - open_price)
-        body_bottom = min(open_price, close)
+   """Create candlestick chart from GeckoTerminal data"""
+   ohlcv_list = await get_geckoterminal_ohlcv(pool_id, timeframe, aggregate)
+   
+   if not ohlcv_list:
+       return None
+   
+   plt.style.use('dark_background')
+   fig, ax = plt.subplots(figsize=(16, 9))
+   fig.patch.set_facecolor('#1a1a1a')
+   ax.set_facecolor('#1a1a1a')
+           
+   # Calculate candle width based on timeframe
+   if timeframe == "minute":
+       candle_width = timedelta(minutes=int(aggregate))
+   elif timeframe == "hour":
+       candle_width = timedelta(hours=int(aggregate))
+   else:  # day
+       candle_width = timedelta(days=int(aggregate))
+                   
+   # Convert to matplotlib time units (80% of full width for spacing)
+   width_delta = candle_width * 0.8
+               
+   timestamps = []
+   for candle in ohlcv_list:
+       timestamp, open_price, high, low, close, volume = candle
+       dt_timestamp = datetime.fromtimestamp(timestamp)
+       timestamps.append(dt_timestamp)
+       
+       # محاسبه مرکز افقی کندل
+       candle_center = dt_timestamp + (width_delta / 2)
+       
+       color = '#00ff88' if close >= open_price else '#ff4444'
+       body_height = abs(close - open_price)
+       body_bottom = min(open_price, close)  
+   
+       # Draw wicks (سایه) - اول سایه رسم می‌شه
+       ax.plot([candle_center, candle_center], [low, high], color=color, linewidth=2, alpha=0.9)
+   
+       # Draw candlestick body (بدنه)
+       if body_height > 0:
+           rect = patches.Rectangle((dt_timestamp, body_bottom), width_delta, body_height,
+                                  facecolor=color, edgecolor=color, alpha=0.8)
+           ax.add_patch(rect)
+       else:
+           # Doji candle
+           ax.plot([dt_timestamp, dt_timestamp + width_delta], [close, close], color=color, linewidth=2)
+   
+   # Set more Y-axis ticks
+   ax.yaxis.set_major_locator(plt.MaxNLocator(nbins=12))
         
-        # Draw candlestick
-        if body_height > 0:
-            rect = patches.Rectangle((i-0.3, body_bottom), 0.6, body_height, 
-                                   facecolor=color, edgecolor=color, alpha=0.8)
-            ax.add_patch(rect)
-        else:
-            # Doji candle
-            ax.plot([i-0.3, i+0.3], [close, close], color=color, linewidth=2)
-        
-        # Draw wicks
-        ax.plot([i, i], [low, high], color=color, linewidth=1, alpha=0.8)
-    
-    # Styling
-    ax.grid(True, alpha=0.3, color='#333333')
-    timeframe_label = f"{aggregate}{timeframe[0].upper()}" if aggregate != "1" else timeframe.title()
-    ax.set_title(f'{symbol} - {timeframe_label} Chart', color='white', fontsize=14)
-    
-    # Current price info
-    if ohlcv_list:
-        latest_candle = ohlcv_list[-1]
-        latest_price = latest_candle[4]  # Close price
-        
-        ax.text(0.02, 0.98, f'Price: ${latest_price:.6f}', 
-               transform=ax.transAxes, color='white', fontsize=12, 
-               verticalalignment='top',
-               bbox=dict(boxstyle='round', facecolor='black', alpha=0.7))
-    
-    # Save to buffer
-    img_buffer = io.BytesIO()
-    plt.savefig(img_buffer, format='png', facecolor='#1a1a1a', dpi=100, bbox_inches='tight')
-    img_buffer.seek(0)
-    plt.close()
-    
-    return img_buffer
+   # Styling  
+   ax.grid(True, alpha=0.3, color='#333333')
+   timeframe_label = f"{aggregate}{timeframe[0].upper()}" if aggregate != "1" else timeframe.title()
+   ax.set_title(f'{symbol} - {timeframe_label} Chart', color='white', fontsize=14)
+   # Add watermark
+   ax.text(0.98, 0.95, 'NarmoonAI', 
+          transform=ax.transAxes, color='#999999', fontsize=16, 
+          alpha=0.8, ha='right', va='top', 
+          style='italic', weight='light')
+   
+   # Current price info
+   realtime_price = await get_realtime_price(pool_id)
+   if realtime_price:
+      latest_price = realtime_price
+   elif ohlcv_list:
+      latest_price = ohlcv_list[-1][4]  # Fallback to last candle
+   else:
+      latest_price = 0
+
+   if latest_price > 0:
+      ax.text(0.02, 0.98, f'Price: ${latest_price:.6f}',
+             transform=ax.transAxes, color='white', fontsize=12,
+             verticalalignment='top',
+             bbox=dict(boxstyle='round', facecolor='black', alpha=0.7))
+
+   # Save to buffer
+   img_buffer = io.BytesIO()
+   plt.savefig(img_buffer, format='png', facecolor='#1a1a1a', dpi=200, bbox_inches='tight')
+   img_buffer.seek(0)
+   plt.close()
+
+   return img_buffer
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message.text
     
     if len(message) == 44 and message.isalnum():
         context.user_data['token'] = message
-        
+       
         keyboard = [
-            [InlineKeyboardButton("15M", callback_data="minute_15"),
-             InlineKeyboardButton("1H", callback_data="hour_1"),
-             InlineKeyboardButton("4H", callback_data="hour_4")]
-        ]
+            [InlineKeyboardButton("1M", callback_data="minute_1"),
+             InlineKeyboardButton("5M", callback_data="minute_5"),
+             InlineKeyboardButton("15M", callback_data="minute_15")],
+            [InlineKeyboardButton("1H", callback_data="hour_1"),
+             InlineKeyboardButton("4H", callback_data="hour_4"),
+             InlineKeyboardButton("1D", callback_data="day_1")]
+        ] 
+       
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await update.message.reply_text("📊 Select timeframe:", reply_markup=reply_markup)

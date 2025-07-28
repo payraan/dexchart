@@ -5,9 +5,12 @@ import matplotlib.patches as patches
 from datetime import datetime, timedelta
 import io
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, MessageHandler, filters, ContextTypes, CallbackQueryHandler
+from telegram.ext import Application, MessageHandler, filters, ContextTypes, CallbackQueryHandler, CommandHandler
+from token_cache import TokenCache
 
 BOT_TOKEN = "8261343183:AAE6RQHdSU54Xc86EfYFDoUtObkmT1RBBXM"
+# Initialize token cache
+token_cache = TokenCache()
 
 async def find_geckoterminal_pool(token_address):
     """Find pool in GeckoTerminal"""
@@ -207,12 +210,75 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await query.message.reply_text(f"❌ Error: {str(e)}")
 
+async def trending_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /trending command"""
+    await update.message.reply_text("🔍 Fetching trending tokens...")
+    
+    try:
+        trending_tokens = token_cache.get_trending_tokens(limit=10)
+        
+        if not trending_tokens:
+            await update.message.reply_text("❌ No trending tokens found. Please wait for data to be collected.")
+            return
+        
+        message = "🔥 **Top Trending Solana Tokens:**\n\n"
+        
+        for i, token in enumerate(trending_tokens, 1):
+            symbol = token['symbol']
+            price = token['price_usd']
+            volume = token['volume_24h']
+            
+            message += f"**{i}. {symbol}**\n"
+            message += f"💰 Price: ${price:.6f}\n"
+            message += f"📊 24h Volume: ${volume:,.0f}\n"
+            message += f"📋 `{token['address']}`\n\n"
+        
+        await update.message.reply_text(message, parse_mode='Markdown')
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error fetching trending tokens: {str(e)}")
+
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(button_callback))
-    print("🤖 Fixed Bot is running...")
-    app.run_polling()
+    app.add_handler(CommandHandler("trending", trending_command))
+    
+    print("🤖 Bot is starting...")
+    
+    # Background updater in separate thread
+    import threading
+    import time
+    import asyncio
+    
+    def background_updater():
+        print("🔄 Starting background token updates every 5 minutes...")
+        while True:
+            try:
+                # Initial fetch on first run
+                async def update():
+                    tokens = await token_cache.fetch_trending_tokens()
+                    print(f"✅ Background update: {len(tokens)} tokens refreshed")
+                
+                asyncio.run(update())
+            except Exception as e:
+                print(f"❌ Background update failed: {e}")
+            
+            # Wait 5 minutes
+            time.sleep(300)
+    
+    # Start background thread
+    bg_thread = threading.Thread(target=background_updater, daemon=True)
+    bg_thread.start()
+    
+    print("📊 Background updates started")
+    print("🚀 Bot is running...")
+    
+    # Start bot in main thread
+    try:
+        app.run_polling()
+    except KeyboardInterrupt:
+        print("\n🛑 Bot stopped")
 
 if __name__ == "__main__":
     main()

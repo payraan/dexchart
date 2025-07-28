@@ -2,6 +2,7 @@ import asyncio
 import httpx
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+import pandas as pd
 from datetime import datetime, timedelta
 import io
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -94,6 +95,40 @@ async def create_chart(pool_id, symbol, timeframe="hour", aggregate="1"):
    width_delta = candle_width * 0.8
                
    timestamps = []
+   
+   # Convert OHLCV data to pandas DataFrame for EMA calculations
+   data_list = []
+   for candle in ohlcv_list:
+       timestamp, open_price, high, low, close, volume = candle
+       data_list.append({
+           'timestamp': timestamp,
+           'open': open_price,
+           'high': high,
+           'low': low,
+           'close': close,
+           'volume': volume
+       })
+   
+   df = pd.DataFrame(data_list)
+
+   # Sort by timestamp for correct EMA calculation
+   df = df.sort_values('timestamp').reset_index(drop=True)
+   
+   # Calculate EMAs (only if enough data available)
+   data_length = len(df)
+   
+   if data_length >= 20:
+       df['ema_20'] = df['close'].ewm(span=20, adjust=False).mean()
+   
+   if data_length >= 50:
+       df['ema_50'] = df['close'].ewm(span=50, adjust=False).mean()
+   
+   if data_length >= 100:
+       df['ema_100'] = df['close'].ewm(span=100, adjust=False).mean()
+   
+   if data_length >= 200:
+       df['ema_200'] = df['close'].ewm(span=200, adjust=False).mean()
+
    for candle in ohlcv_list:
        timestamp, open_price, high, low, close, volume = candle
        dt_timestamp = datetime.fromtimestamp(timestamp)
@@ -118,8 +153,25 @@ async def create_chart(pool_id, symbol, timeframe="hour", aggregate="1"):
            # Doji candle
            ax.plot([dt_timestamp, dt_timestamp + width_delta], [close, close], color=color, linewidth=2)
    
-   # Set more Y-axis ticks
-   ax.yaxis.set_major_locator(plt.MaxNLocator(nbins=12))
+   # Draw EMA lines (only if calculated and have enough warm-up period)
+   timestamps_for_ema = [datetime.fromtimestamp(ts) for ts in df['timestamp']]
+   
+   if 'ema_20' in df.columns and data_length >= 25:
+       start_idx = 10
+       ax.plot(timestamps_for_ema[start_idx:], df['ema_20'][start_idx:], color='#ff6b6b', linewidth=2, alpha=0.8, label='EMA 20')
+   
+   if 'ema_50' in df.columns and data_length >= 60:
+       start_idx = 20
+       ax.plot(timestamps_for_ema[start_idx:], df['ema_50'][start_idx:], color='#ffa726', linewidth=2, alpha=0.8, label='EMA 50')
+   
+   if 'ema_100' in df.columns and data_length >= 120:
+       start_idx = 40
+       ax.plot(timestamps_for_ema[start_idx:], df['ema_100'][start_idx:], color='#66bb6a', linewidth=2, alpha=0.8, label='EMA 100')
+   
+   if 'ema_200' in df.columns and data_length >= 220:  # 220 به جای 250
+       start_idx = 80
+       ax.plot(timestamps_for_ema[start_idx:], df['ema_200'][start_idx:], color='#42a5f5', linewidth=2, alpha=0.8, label='EMA 200')
+
         
    # Styling  
    ax.grid(True, alpha=0.3, color='#333333')

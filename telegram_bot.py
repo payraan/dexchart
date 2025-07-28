@@ -1,6 +1,7 @@
 import asyncio
 import httpx
 import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 import matplotlib.patches as patches
 import pandas as pd
 from datetime import datetime, timedelta
@@ -46,7 +47,7 @@ async def get_geckoterminal_ohlcv(pool_id, timeframe="hour", aggregate="1"):
     network, pool_address = pool_id.split('_')
     url = f"https://api.geckoterminal.com/api/v2/networks/{network}/pools/{pool_address}/ohlcv/{timeframe}"
     
-    limits = {"minute": 300, "hour": 240, "day": 90}
+    limits = {"minute": 300, "hour": 240, "day": 90}  # بازگردوندن به حالت قبل
     params = {
         'aggregate': aggregate,
         'limit': str(limits.get(timeframe, 24))
@@ -72,6 +73,24 @@ async def get_realtime_price(pool_id):
             attributes = pool_data.get('attributes', {})
             return float(attributes.get('base_token_price_usd', 0))
     return None
+
+def find_fractals(highs, lows, period=5):
+    """پیدا کردن فرکتال‌های 5 کندلی"""
+    supply_fractals = []
+    demand_fractals = []
+    
+    half_period = period // 2
+    
+    for i in range(half_period, len(highs) - half_period):
+        # فرکتال عرضه
+        if all(highs[i] > highs[j] for j in range(i - half_period, i + half_period + 1) if j != i):
+            supply_fractals.append(i)
+        
+        # فرکتال تقاضا
+        if all(lows[i] < lows[j] for j in range(i - half_period, i + half_period + 1) if j != i):
+            demand_fractals.append(i)
+    
+    return supply_fractals, demand_fractals
 
 async def create_chart(pool_id, symbol, timeframe="hour", aggregate="1"):
    """Create candlestick chart from GeckoTerminal data"""
@@ -203,34 +222,48 @@ async def create_chart(pool_id, symbol, timeframe="hour", aggregate="1"):
        highs = df['high'].values
        lows = df['low'].values
        
-       # Find swing highs and lows
-       high_peaks = argrelextrema(highs, np.greater, order=swing_length//2)[0]
-       low_peaks = argrelextrema(lows, np.less, order=swing_length//2)[0]
+       # Find fractal patterns
+       supply_fractals, demand_fractals = find_fractals(highs, lows, period=5)
        
        # Draw Supply Zones (resistance)
-       for peak_idx in high_peaks[-4:]:  # Last 4 supply zones
+       for peak_idx in supply_fractals[-2:]:
            if peak_idx < len(df):
+               # استفاده از منطق قدیمی برای ضخامت (عرض)
                zone_top = df.iloc[peak_idx]['high']
                zone_bottom = zone_top * (1 - zone_width / 100)
-               peak_time = timestamps_for_ema[peak_idx]
-               
-               # Draw zone rectangle
-               rect = patches.Rectangle((peak_time - timedelta(hours=half_duration), zone_bottom),
-                                      timedelta(hours=zone_duration_hours), zone_top - zone_bottom,
-                                      facecolor='red', alpha=0.25, edgecolor='red', linewidth=1)
-               ax.add_patch(rect)
         
+               peak_time = timestamps_for_ema[peak_idx]
+               chart_duration = timestamps_for_ema[-1] - timestamps_for_ema[0]
+               start_time = timestamps_for_ema[0] - (chart_duration * 0.5)
+
+               # استفاده از منطق صحیح برای طول
+               start_num = mdates.date2num(start_time)
+               end_num = mdates.date2num(peak_time)
+               width_num = end_num - start_num
+
+               rect = patches.Rectangle((start_num, zone_bottom), width_num, zone_top - zone_bottom,
+                                       facecolor='red', alpha=0.20, edgecolor='red', linewidth=0.5)
+               ax.add_patch(rect)
+
        # Draw Demand Zones (support)
-       for peak_idx in low_peaks[-4:]:  # Last 4 demand zones
+       for peak_idx in demand_fractals[-2:]:
            if peak_idx < len(df):
+               # استفاده از منطق قدیمی برای ضخامت (عرض)
                zone_bottom = df.iloc[peak_idx]['low']
                zone_top = zone_bottom * (1 + zone_width / 100)
+
                peak_time = timestamps_for_ema[peak_idx]
-               
-               # Draw zone rectangle
-               rect = patches.Rectangle((peak_time - timedelta(hours=half_duration), zone_bottom),
-                                      timedelta(hours=zone_duration_hours), zone_top - zone_bottom,
-                                      facecolor='green', alpha=0.25, edgecolor='green', linewidth=1)
+               # امتداد بیشتر به راست (مثلاً 50% بیشتر از کل نمودار)
+               chart_duration = timestamps_for_ema[-1] - timestamps_for_ema[0]
+               start_time = timestamps_for_ema[0] - (chart_duration * 0.5)
+
+               # استفاده از منطق صحیح برای طول
+               start_num = mdates.date2num(start_time)
+               end_num = mdates.date2num(peak_time)
+               width_num = end_num - start_num
+
+               rect = patches.Rectangle((start_num, zone_bottom), width_num, zone_top - zone_bottom,
+                                       facecolor='green', alpha=0.20, edgecolor='green', linewidth=0.5)
                ax.add_patch(rect)
 
    # Styling  

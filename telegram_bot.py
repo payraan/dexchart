@@ -162,7 +162,7 @@ def find_major_zones(df, period=5):
     
     return top_supply, top_demand
 
-def draw_fibonacci_levels(ax, df, lookback_period=200):
+def draw_fibonacci_levels(ax, df, lookback_period=400):
    """Draw Fibonacci retracement levels based on highest/lowest in lookback period"""
    if len(df) < lookback_period:
        lookback_period = len(df)
@@ -230,7 +230,7 @@ async def get_geckoterminal_ohlcv(pool_id, timeframe="hour", aggregate="1"):
     network, pool_address = pool_id.split('_')
     url = f"https://api.geckoterminal.com/api/v2/networks/{network}/pools/{pool_address}/ohlcv/{timeframe}"
     
-    limits = {"minute": 300, "hour": 240, "day": 90}  # بازگردوندن به حالت قبل
+    limits = {"minute": 300, "hour": 1000, "day": 90}  # بازگردوندن به حالت قبل
     params = {
         'aggregate': aggregate,
         'limit': str(limits.get(timeframe, 24))

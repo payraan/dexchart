@@ -16,6 +16,152 @@ BOT_TOKEN = "8261343183:AAE6RQHdSU54Xc86EfYFDoUtObkmT1RBBXM"
 # Initialize token cache
 token_cache = TokenCache()
 
+
+def calculate_atr(df, period=14):
+    """Calculate Average True Range"""
+    high = df['high']
+    low = df['low']
+    close = df['close']
+    
+    prev_close = close.shift(1)
+    tr1 = high - low
+    tr2 = (high - prev_close).abs()
+    tr3 = (low - prev_close).abs()
+    
+    true_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    atr = true_range.rolling(window=period).mean()
+    return atr
+
+def find_major_zones(df, period=5):
+    """Find major support and resistance zones"""
+    if len(df) < 30:  # حداقل داده لازم
+        return [], []
+    
+    # محاسبه ATR
+    atr = calculate_atr(df, period=14)
+    
+    # پیدا کردن تمام فرکتال‌ها
+    highs = df['high'].values
+    lows = df['low'].values
+    supply_fractals, demand_fractals = find_fractals(highs, lows, period=period)
+    
+    # محاسبه امتیاز برای هر فرکتال
+    major_supply = []
+    major_demand = []
+
+    # امتیازدهی به فرکتال‌های عرضه (Supply)
+    for idx in supply_fractals:
+        if idx + 5 < len(df) and not pd.isna(atr.iloc[idx]):
+            zone_price = df.iloc[idx]['high']
+            
+            # محاسبه قدرت واکنش (5 کندل بعدی)
+            price_move = abs(df.iloc[idx]['high'] - df.iloc[idx+5]['close'])
+            reaction_strength = price_move / atr.iloc[idx] if atr.iloc[idx] > 0 else 0
+            
+            # محاسبه حجم میانگین در نقطه برخورد
+            volume_score = df.iloc[idx]['volume'] / df['volume'].mean() if df['volume'].mean() > 0 else 1
+            
+            # ذخیره اطلاعات فرکتال
+            major_supply.append({
+                'index': idx,
+                'price': zone_price,
+                'reaction_strength': reaction_strength,
+                'volume_score': volume_score
+            })
+
+
+    # امتیازدهی به فرکتال‌های تقاضا (Demand)
+    for idx in demand_fractals:
+        if idx + 5 < len(df) and not pd.isna(atr.iloc[idx]):
+            zone_price = df.iloc[idx]['low']
+            
+            # محاسبه قدرت واکنش (5 کندل بعدی)
+            price_move = abs(df.iloc[idx]['low'] - df.iloc[idx+5]['close'])
+            reaction_strength = price_move / atr.iloc[idx] if atr.iloc[idx] > 0 else 0
+            
+            # محاسبه حجم میانگین در نقطه برخورد
+            volume_score = df.iloc[idx]['volume'] / df['volume'].mean() if df['volume'].mean() > 0 else 1
+            
+            # ذخیره اطلاعات فرکتال
+            major_demand.append({
+                'index': idx,
+                'price': zone_price,
+                'reaction_strength': reaction_strength,
+                'volume_score': volume_score
+            })
+
+    # خوشه‌بندی و امتیازدهی نهایی برای Supply
+    supply_clusters = []
+    for zone in major_supply:
+        # پیدا کردن خوشه مناسب (تلرانس 0.5%)
+        found_cluster = False
+        for cluster in supply_clusters:
+            if abs(zone['price'] - cluster['avg_price']) / cluster['avg_price'] < 0.005:
+                cluster['zones'].append(zone)
+                cluster['avg_price'] = sum(z['price'] for z in cluster['zones']) / len(cluster['zones'])
+                found_cluster = True
+                break
+        
+        if not found_cluster:
+            supply_clusters.append({
+                'zones': [zone],
+                'avg_price': zone['price']
+            })
+
+    # خوشه‌بندی و امتیازدهی نهایی برای Demand
+    demand_clusters = []
+    for zone in major_demand:
+        # پیدا کردن خوشه مناسب (تلرانس 0.5%)
+        found_cluster = False
+        for cluster in demand_clusters:
+            if abs(zone['price'] - cluster['avg_price']) / cluster['avg_price'] < 0.005:
+                cluster['zones'].append(zone)
+                cluster['avg_price'] = sum(z['price'] for z in cluster['zones']) / len(cluster['zones'])
+                found_cluster = True
+                break
+        
+        if not found_cluster:
+            demand_clusters.append({
+                'zones': [zone],
+                'avg_price': zone['price']
+            })
+
+    # محاسبه امتیاز نهایی برای هر خوشه Supply
+    for cluster in supply_clusters:
+        zones = cluster['zones']
+        
+        # وزن‌های امتیازدهی
+        avg_reaction = sum(z['reaction_strength'] for z in zones) / len(zones)
+        touch_count = len(zones)
+        avg_volume = sum(z['volume_score'] for z in zones) / len(zones)
+        time_span = max(z['index'] for z in zones) - min(z['index'] for z in zones) + 1
+        
+        # امتیاز نهایی (وزن‌دار)
+        final_score = (0.4 * avg_reaction) + (0.3 * touch_count) + (0.2 * avg_volume) + (0.1 * time_span/10)
+        cluster['score'] = final_score
+    
+    # محاسبه امتیاز نهایی برای هر خوشه Demand
+    for cluster in demand_clusters:
+        zones = cluster['zones']
+        
+        avg_reaction = sum(z['reaction_strength'] for z in zones) / len(zones)
+        touch_count = len(zones)
+        avg_volume = sum(z['volume_score'] for z in zones) / len(zones)
+        time_span = max(z['index'] for z in zones) - min(z['index'] for z in zones) + 1
+        
+        final_score = (0.4 * avg_reaction) + (0.3 * touch_count) + (0.2 * avg_volume) + (0.1 * time_span/10)
+        cluster['score'] = final_score
+
+    # انتخاب 2 برترین خوشه از هر نوع
+    supply_clusters.sort(key=lambda x: x['score'], reverse=True)
+    demand_clusters.sort(key=lambda x: x['score'], reverse=True)
+    
+    # برگرداندن 2 برترین از هر نوع
+    top_supply = supply_clusters[:2] if len(supply_clusters) >= 2 else supply_clusters
+    top_demand = demand_clusters[:2] if len(demand_clusters) >= 2 else demand_clusters
+    
+    return top_supply, top_demand
+
 async def find_geckoterminal_pool(token_address):
     """Find pool in GeckoTerminal"""
     search_url = f"https://api.geckoterminal.com/api/v2/search/pools?query={token_address}"
@@ -197,74 +343,38 @@ async def create_chart(pool_id, symbol, timeframe="hour", aggregate="1"):
    # 📊 SUPPLY/DEMAND ZONES DETECTION
    # ═══════════════════════════════════════════════════════════════════════════
    
-   swing_length = 15
-   zone_width = 0.3
-   
-   # Dynamic zone width based on timeframe
-   if timeframe == "minute":
-       zone_width = 0.5  # 0.3 → 0.5
-   elif timeframe == "hour":
-       zone_width = 1.5  # 1.0 → 1.5
-   else:  # day
-       zone_width = 2.0  # 1.5 → 2.0
-
-   # این رو بذار:
-   if timeframe == "minute":
-       zone_duration_hours = int(aggregate) * 4  # 2 → 4
-   elif timeframe == "hour":
-       zone_duration_hours = int(aggregate) * 20  # 12 → 20
-   else:  # day
-       zone_duration_hours = int(aggregate) * 24 * 5  # 3 → 5
-   
-   half_duration = zone_duration_hours // 2
-   
-   if len(df) > swing_length * 2:  # Enough data for pivot detection
-       highs = df['high'].values
-       lows = df['low'].values
+   # امتداد ناحیه به سمت راست برای ظاهر بهتر (همیشه تعریف شه)
+   chart_end_time = timestamps_for_ema[-1] + (timestamps_for_ema[-1] - timestamps_for_ema[0]) * 0.1
+      
+   if len(df) > 30:  # حداقل داده برای Major zones
+       # پیدا کردن سطوح ماژور
+       major_supply, major_demand = find_major_zones(df, period=5)
        
-       # Find fractal patterns
-       supply_fractals, demand_fractals = find_fractals(highs, lows, period=5)
+       # Draw Major Supply Zones (resistance)
+       for cluster in major_supply:
+           zone_top = cluster['avg_price']
+           zone_bottom = zone_top * (1 - 0.005)  # 0.5% thickness
+           
+           start_num = mdates.date2num(timestamps_for_ema[0])
+           end_num = mdates.date2num(chart_end_time)
+           width_num = end_num - start_num
+           
+           rect = patches.Rectangle((start_num, zone_bottom), width_num, zone_top - zone_bottom,   
+                                   facecolor='orange', alpha=0.25, edgecolor='orange', linewidth=2)
+           ax.add_patch(rect)
        
-       # Draw Supply Zones (resistance)
-       for peak_idx in supply_fractals[-2:]:
-           if peak_idx < len(df):
-               # استفاده از منطق قدیمی برای ضخامت (عرض)
-               zone_top = df.iloc[peak_idx]['high']
-               zone_bottom = zone_top * (1 - zone_width / 100)
-        
-               peak_time = timestamps_for_ema[peak_idx]
-               chart_duration = timestamps_for_ema[-1] - timestamps_for_ema[0]
-               start_time = timestamps_for_ema[0] - (chart_duration * 0.5)
-
-               # استفاده از منطق صحیح برای طول
-               start_num = mdates.date2num(start_time)
-               end_num = mdates.date2num(peak_time)
-               width_num = end_num - start_num
-
-               rect = patches.Rectangle((start_num, zone_bottom), width_num, zone_top - zone_bottom,
-                                       facecolor='red', alpha=0.20, edgecolor='red', linewidth=0.5)
-               ax.add_patch(rect)
-
-       # Draw Demand Zones (support)
-       for peak_idx in demand_fractals[-2:]:
-           if peak_idx < len(df):
-               # استفاده از منطق قدیمی برای ضخامت (عرض)
-               zone_bottom = df.iloc[peak_idx]['low']
-               zone_top = zone_bottom * (1 + zone_width / 100)
-
-               peak_time = timestamps_for_ema[peak_idx]
-               # امتداد بیشتر به راست (مثلاً 50% بیشتر از کل نمودار)
-               chart_duration = timestamps_for_ema[-1] - timestamps_for_ema[0]
-               start_time = timestamps_for_ema[0] - (chart_duration * 0.5)
-
-               # استفاده از منطق صحیح برای طول
-               start_num = mdates.date2num(start_time)
-               end_num = mdates.date2num(peak_time)
-               width_num = end_num - start_num
-
-               rect = patches.Rectangle((start_num, zone_bottom), width_num, zone_top - zone_bottom,
-                                       facecolor='green', alpha=0.20, edgecolor='green', linewidth=0.5)
-               ax.add_patch(rect)
+       # Draw Major Demand Zones (support)
+       for cluster in major_demand:
+           zone_bottom = cluster['avg_price']
+           zone_top = zone_bottom * (1 + 0.005)  # 0.5% thickness
+           
+           start_num = mdates.date2num(timestamps_for_ema[0])
+           end_num = mdates.date2num(chart_end_time)
+           width_num = end_num - start_num
+           
+           rect = patches.Rectangle((start_num, zone_bottom), width_num, zone_top - zone_bottom,   
+                                   facecolor='purple', alpha=0.25, edgecolor='purple', linewidth=2)
+           ax.add_patch(rect)
 
    # Styling  
    ax.grid(True, alpha=0.3, color='#333333')
@@ -290,6 +400,9 @@ async def create_chart(pool_id, symbol, timeframe="hour", aggregate="1"):
              transform=ax.transAxes, color='white', fontsize=12,
              verticalalignment='top',
              bbox=dict(boxstyle='round', facecolor='black', alpha=0.7))
+
+   # تنظیم محدوده محور X برای اطمینان
+   ax.set_xlim(timestamps_for_ema[0], chart_end_time)
 
    # Save to buffer
    img_buffer = io.BytesIO()

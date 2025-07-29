@@ -162,6 +162,43 @@ def find_major_zones(df, period=5):
     
     return top_supply, top_demand
 
+def draw_fibonacci_levels(ax, df, lookback_period=200):
+   """Draw Fibonacci retracement levels based on highest/lowest in lookback period"""
+   if len(df) < lookback_period:
+       lookback_period = len(df)
+           
+   # برش دیتافریم - آخرین کندل‌ها
+   recent_df = df.iloc[-lookback_period:]   
+           
+   # یافتن سقف و کف مطلق
+   high_point = recent_df['high'].max()
+   low_point = recent_df['low'].min()
+           
+   # محاسبه اختلاف قیمت
+   price_range = high_point - low_point
+           
+   if price_range <= 0:
+       return  # اگه range نداشتیم، چیزی رسم نکن
+               
+   # سطوح فیبوناچی استاندارد
+   fib_levels = [0.0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0]
+   fib_colors = ['#e74c3c', '#ff9ff3', '#54a0ff', '#5f27cd', '#00d2d3', '#ff9f43', '#2ecc71']
+
+   # رسم هر سطح فیبوناچی
+   for i, level in enumerate(fib_levels):
+       level_price = high_point - (price_range * level)
+           
+       # رسم خط افقی
+       ax.axhline(y=level_price, color=fib_colors[i], linestyle='--',
+                 linewidth=1, alpha=0.7)
+           
+       # اضافه کردن برچسب
+       ax.text(0.02, level_price, f'Fib {level}: ${level_price:.6f}',
+              transform=ax.get_yaxis_transform(),
+              verticalalignment='center', fontsize=9,
+              color=fib_colors[i], alpha=0.8,
+              bbox=dict(boxstyle='round,pad=0.3', facecolor='black', alpha=0.7))
+
 async def find_geckoterminal_pool(token_address):
     """Find pool in GeckoTerminal"""
     search_url = f"https://api.geckoterminal.com/api/v2/search/pools?query={token_address}"
@@ -284,14 +321,8 @@ async def create_chart(pool_id, symbol, timeframe="hour", aggregate="1"):
    # Calculate EMAs (only if enough data available)
    data_length = len(df)
    
-   if data_length >= 20:
-       df['ema_20'] = df['close'].ewm(span=20, adjust=False).mean()
-   
    if data_length >= 50:
        df['ema_50'] = df['close'].ewm(span=50, adjust=False).mean()
-   
-   if data_length >= 100:
-       df['ema_100'] = df['close'].ewm(span=100, adjust=False).mean()
    
    if data_length >= 200:
        df['ema_200'] = df['close'].ewm(span=200, adjust=False).mean()
@@ -323,17 +354,9 @@ async def create_chart(pool_id, symbol, timeframe="hour", aggregate="1"):
    # Draw EMA lines (only if calculated and have enough warm-up period)
    timestamps_for_ema = [datetime.fromtimestamp(ts) for ts in df['timestamp']]
    
-   if 'ema_20' in df.columns and data_length >= 25:
-       start_idx = 10
-       ax.plot(timestamps_for_ema[start_idx:], df['ema_20'][start_idx:], color='#ff6b6b', linewidth=2, alpha=0.8, label='EMA 20')
-   
    if 'ema_50' in df.columns and data_length >= 60:
        start_idx = 20
        ax.plot(timestamps_for_ema[start_idx:], df['ema_50'][start_idx:], color='#ffa726', linewidth=2, alpha=0.8, label='EMA 50')
-   
-   if 'ema_100' in df.columns and data_length >= 120:
-       start_idx = 40
-       ax.plot(timestamps_for_ema[start_idx:], df['ema_100'][start_idx:], color='#66bb6a', linewidth=2, alpha=0.8, label='EMA 100')
    
    if 'ema_200' in df.columns and data_length >= 220:  # 220 به جای 250
        start_idx = 80
@@ -403,6 +426,9 @@ async def create_chart(pool_id, symbol, timeframe="hour", aggregate="1"):
 
    # تنظیم محدوده محور X برای اطمینان
    ax.set_xlim(timestamps_for_ema[0], chart_end_time)
+   
+   # رسم سطوح فیبوناچی
+   draw_fibonacci_levels(ax, df)
 
    # Save to buffer
    img_buffer = io.BytesIO()

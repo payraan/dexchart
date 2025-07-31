@@ -11,45 +11,74 @@ class StrategyEngine:
 
    async def detect_breakout_signal(self, token_address, pool_id, symbol):
        """
-       Detects breakout signals for a token using a simplified rolling-high resistance.
-       NOTE: This is a temporary, simplified version for initial testing.
+       Detects breakout signals using advanced major zones analysis
        """
-       # Get historical data
-       df = await self.analysis_engine.get_historical_data(pool_id, "minute", "15", 100)
+       # Configuration
+       ZONE_SCORE_MIN = 3.0  # Minimum score for significant zones
+    
+       # Get historical data (1H for zones, 15M for detection)
+       df_1h = await self.analysis_engine.get_historical_data(pool_id, "hour", "1", 200)
+       df_15m = await self.analysis_engine.get_historical_data(pool_id, "minute", "15", 100)
 
-       if df is None or df.empty or len(df) < 50:
+       if df_1h is None or df_1h.empty or len(df_1h) < 50:
+           return None
+       if df_15m is None or df_15m.empty or len(df_15m) < 20:
            return None
 
-       # --- Simplified Resistance Detection ---
-       # We will replace this with our advanced `find_major_zones` later.
-       resistance_level = df['high'].rolling(window=20).max().iloc[-5] # Resistance from 5 candles ago
+       # --- Advanced Zone Detection (1H timeframe) ---
+       supply_zones, demand_zones = self.analysis_engine.find_major_zones(df_1h, period=5)
+    
+       # Filter only high-score zones
+       significant_supply = [zone for zone in supply_zones if zone['score'] >= ZONE_SCORE_MIN]
+       significant_demand = [zone for zone in demand_zones if zone['score'] >= ZONE_SCORE_MIN]
+    
+       if not significant_supply and not significant_demand:
+           return None
 
-       # Get current market data from the last candle
-       last_candle = df.iloc[-1]
+       # --- Current Market Data (15M timeframe) ---
+       last_candle = df_15m.iloc[-1]
        current_price = last_candle['close']
        current_volume = last_candle['volume']
-       avg_volume = df['volume'].rolling(window=20).mean().iloc[-1]
+       avg_volume = df_15m['volume'].rolling(window=20).mean().iloc[-1]
 
-       # --- Breakout Conditions ---
-       if pd.isna(resistance_level) or pd.isna(avg_volume):
-            return None # Not enough data for calculation
+       # --- Breakout Detection ---
+       if pd.isna(avg_volume) or avg_volume <= 0:
+           return None
 
-       volume_spike = current_volume > (avg_volume * 1.5)  # 1.5x volume
-       price_breakout = current_price > resistance_level    # واقعی breakout
+       #volume_spike = current_volume > (avg_volume * 0.5)  # 1.5x volume requirement
+       volume_spike = True  # برای تست major zones    
 
-       print(f"   Debug: Price {current_price:.6f} vs Resistance {resistance_level:.6f}, Volume {current_volume/avg_volume:.1f}x")
-
-       if price_breakout and volume_spike:
-           print(f"✅ BREAKOUT SIGNAL DETECTED for {symbol}!")
-           return {
-               'token_address': token_address,
-               'symbol': symbol,
-               'signal_type': 'breakout',
-               'current_price': current_price,
-               'resistance_level': resistance_level,
-               'volume_ratio': current_volume / avg_volume if avg_volume > 0 else 0,
-               'timestamp': datetime.now().isoformat()
-           }
+       # Check supply zone breakouts (bullish)
+       for zone in significant_supply:
+           if current_price > zone['avg_price'] and volume_spike:
+               print(f"✅ MAJOR SUPPLY BREAKOUT for {symbol}! Score: {zone['score']:.1f}")
+               return {
+                   'token_address': token_address,
+                   'pool_id': pool_id,
+                   'symbol': symbol,
+                   'signal_type': 'supply_breakout',
+                   'current_price': current_price,
+                   'resistance_level': zone['avg_price'],
+                   'zone_score': zone['score'],
+                   'volume_ratio': current_volume / avg_volume,
+                   'timestamp': datetime.now().isoformat()
+               }
+    
+       # Check demand zone breakdowns (bearish - optional for shorts)
+       for zone in significant_demand:
+           if current_price < zone['avg_price'] and volume_spike:
+               print(f"✅ MAJOR DEMAND BREAKDOWN for {symbol}! Score: {zone['score']:.1f}")
+               return {
+                   'token_address': token_address,
+                   'pool_id': pool_id,
+                   'symbol': symbol,
+                   'signal_type': 'demand_breakdown',
+                   'current_price': current_price,
+                   'support_level': zone['avg_price'],
+                   'zone_score': zone['score'],
+                   'volume_ratio': current_volume / avg_volume,
+                   'timestamp': datetime.now().isoformat()
+               }
 
        return None
 

@@ -62,6 +62,18 @@ class TokenCache:
             )
         ''')
        
+        # Watchlist table for tracking all seen tokens
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS watchlist_tokens (
+                address TEXT PRIMARY KEY,
+                symbol TEXT,
+                pool_id TEXT,
+                first_seen TEXT,
+                last_active TEXT,
+                status TEXT DEFAULT 'active'
+            )
+        ''')
+
         conn.commit()
         conn.close()
 
@@ -165,7 +177,57 @@ class TokenCache:
         conn.commit()
         conn.close()
         print(f"Saved/Updated {len(tokens)} trending tokens to database")
+        self.add_to_watchlist(tokens)
  
+    def add_to_watchlist(self, tokens):
+        """Add tokens to watchlist if not already exists"""
+        if not tokens:
+            return
+
+        current_time = datetime.now().isoformat()
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        for token in tokens:
+            cursor.execute('''
+                INSERT OR IGNORE INTO watchlist_tokens
+                (address, symbol, pool_id, first_seen, last_active, status)
+                VALUES (?, ?, ?, ?, ?, 'active')
+            ''', (token['address'], token['symbol'], token['pool_id'], 
+                  current_time, current_time))
+
+        conn.commit()
+        conn.close()
+
+    def get_watchlist_tokens(self, limit=150):
+        """Get tokens from watchlist, prioritizing recently active ones"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT address, symbol, pool_id, first_seen, last_active, status
+            FROM watchlist_tokens 
+            WHERE status = 'active'
+            ORDER BY last_active DESC 
+            LIMIT ?
+        ''', (limit,))
+        
+        results = cursor.fetchall()
+        conn.close()
+        
+        tokens = []
+        for row in results:
+            tokens.append({
+                'address': row[0],
+                'symbol': row[1], 
+                'pool_id': row[2],
+                'first_seen': row[3],
+                'last_active': row[4],
+                'status': row[5]
+            })
+        
+        return tokens
+
     def get_trending_tokens(self, limit=10):
         """Get trending tokens from database"""
         conn = sqlite3.connect(self.db_path)

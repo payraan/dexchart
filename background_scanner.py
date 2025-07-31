@@ -6,6 +6,8 @@ from datetime import datetime
 from token_cache import TokenCache
 from strategy_engine import StrategyEngine
 from telegram import Bot
+import io
+import asyncio
 
 class BackgroundScanner:
     def __init__(self, bot_token, chat_id, scan_interval=300):
@@ -17,32 +19,74 @@ class BackgroundScanner:
         self.running = False
 
     async def send_signal_alert(self, signal):
-        """یک هشدار سیگنال را به تلگرام ارسال می‌کند."""
-        message = (
-            f"🚀 *BREAKOUT ALERT*\n\n"
-            f"**Token:** *{signal['symbol']}*\n"
-            f"**Current Price:** `${signal['current_price']:.6f}`\n"
-            f"**Resistance Broken:** `${signal['resistance_level']:.6f}`\n"
-            f"**Volume:** `{signal['volume_ratio']:.1f}x normal`\n\n"
-            f"Time: `{signal['timestamp']}`"
-        )
+        """یک هشدار سیگنال همراه با نمودار را به تلگرام ارسال می‌کند."""
         try:
-            await self.bot.send_message(
-                chat_id=self.chat_id,
-                text=message,
-                parse_mode='Markdown'
+            # ساخت نمودار برای سیگنال
+            print(f"🎨 در حال ساخت نمودار برای {signal['symbol']}...")
+            chart_image = await self.strategy_engine.analysis_engine.create_chart(
+                signal.get('pool_id', ''), 
+                signal['symbol'], 
+                timeframe="hour", 
+                aggregate="1"
             )
-            print(f"📱 هشدار برای {signal['symbol']} به تلگرام ارسال شد.")
+        
+            # پیام متنی
+            message = (
+                f"🚀 *MAJOR ZONE BREAKOUT*\n\n"
+                f"**Token:** *{signal['symbol']}*\n"
+                f"**Signal:** `{signal['signal_type']}`\n"
+                f"**Zone Score:** `{signal['zone_score']:.1f}/10`\n"
+                f"**Current Price:** `${signal['current_price']:.6f}`\n"
+                f"**Level Broken:** `${signal.get('resistance_level', signal.get('support_level', 'N/A')):.6f}`\n\n"
+                f"Time: `{signal['timestamp']}`"
+            )
+        
+            if chart_image:
+                # ارسال نمودار + پیام
+                await self.bot.send_photo(
+                    chat_id=self.chat_id,
+                    photo=chart_image,
+                    caption=message,
+                    parse_mode='Markdown'
+                )
+                print(f"📊 نمودار + هشدار برای {signal['symbol']} ارسال شد.")
+            else:
+                # فقط پیام متنی اگر نمودار ساخته نشد
+                await self.bot.send_message(
+                    chat_id=self.chat_id,
+                    text=message,
+                    parse_mode='Markdown'
+                )
+                print(f"📱 هشدار متنی برای {signal['symbol']} ارسال شد.")
+            
         except Exception as e:
             print(f"❌ خطایی در ارسال هشدار به تلگرام رخ داد: {e}")
 
     async def scan_tokens(self):
         """تمام توکن‌ها را برای یافتن سیگنال اسکن می‌کند."""
         print(f"🔍 [{datetime.now().strftime('%H:%M:%S')}] شروع اسکن پس‌زمینه...")
-        tokens = self.token_cache.get_trending_tokens(limit=50)
+    
+        # Get combination of trending + watchlist tokens
+        trending_tokens = self.token_cache.get_trending_tokens(limit=50)
+        watchlist_tokens = self.token_cache.get_watchlist_tokens(limit=150)
+    
+        # Combine both lists (trending first for priority)
+        tokens = trending_tokens + watchlist_tokens
+    
+        # Remove duplicates while keeping order
+        seen_addresses = set()
+        unique_tokens = []
+        for token in tokens:
+            if token['address'] not in seen_addresses:
+                seen_addresses.add(token['address'])
+                unique_tokens.append(token)
+    
+        tokens = unique_tokens
+    
+        print(f"📊 اسکن {len(trending_tokens)} توکن ترند + {len(watchlist_tokens)} توکن watchlist = {len(tokens)} توکن یکتا")
 
         if not tokens:
-            print("INFO: هیچ توکن ترندی برای اسکن یافت نشد.")
+            print("INFO: هیچ توکنی برای اسکن یافت نشد.")
             return
 
         signals_found = 0
@@ -64,7 +108,7 @@ class BackgroundScanner:
 
             except Exception as e:
                 print(f"❌ خطایی هنگام اسکن {token.get('symbol', 'Unknown')} رخ داد: {e}")
-        
+
         print(f"📊 اسکن کامل شد. {signals_found} سیگنال جدید یافت شد.")
 
     async def start_scanning(self):

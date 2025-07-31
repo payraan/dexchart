@@ -10,9 +10,11 @@ class TokenCache:
         self.setup_database()
 
     def setup_database(self):
-        """Create database table if not exists"""
+        """Create database tables if not exists"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
+       
+        # Original trending tokens table
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS trending_tokens (
                 address TEXT PRIMARY KEY,
@@ -23,6 +25,43 @@ class TokenCache:
                 updated_at TEXT
             )
         ''')
+       
+        # Market structure table for support/resistance levels
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS market_structure (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                token_address TEXT,
+                level_type TEXT,
+                price_level REAL,
+                score REAL,
+                last_tested_at TEXT,
+                created_at TEXT
+            )
+        ''')
+       
+        # Indicator status table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS indicator_status (
+                token_address TEXT PRIMARY KEY,
+                price_vs_ema200 TEXT,
+                rsi_14 REAL,
+                macd_signal TEXT,
+                volume_avg_20 REAL,
+                last_updated TEXT
+            )
+        ''')
+       
+        # Alert history table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS alert_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                token_address TEXT,
+                alert_type TEXT,
+                timestamp TEXT,
+                price_at_alert REAL
+            )
+        ''')
+       
         conn.commit()
         conn.close()
 
@@ -31,7 +70,7 @@ class TokenCache:
         url = "https://api.geckoterminal.com/api/v2/networks/solana/trending_pools"
         params = {
             'include': 'base_token,quote_token',
-            'limit': '20'
+            'limit': '50'
         }
         
         try:

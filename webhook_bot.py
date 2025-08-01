@@ -11,6 +11,7 @@ from config import Config
 # Configuration
 BOT_TOKEN = Config.BOT_TOKEN
 PORT = int(os.getenv("PORT", 8000))
+print(f"🔧 Using PORT: {PORT}")
 
 # Railway URL (automatically generated)
 RAILWAY_URL = f"https://{os.getenv('RAILWAY_PUBLIC_DOMAIN', 'localhost')}"
@@ -71,4 +72,5 @@ if __name__ == "__main__":
     import uvicorn
     print(f"🤖 Starting webhook bot on port {PORT}")
     print(f"🔗 Webhook URL will be: {WEBHOOK_URL}")
+    print(f"🔧 Railway expects port: {PORT}")
     uvicorn.run(app, host="0.0.0.0", port=PORT)

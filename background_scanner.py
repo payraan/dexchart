@@ -8,6 +8,7 @@ from strategy_engine import StrategyEngine
 from telegram import Bot
 import io
 import asyncio
+from config import Config
 
 class BackgroundScanner:
     def __init__(self, bot_token, chat_id, scan_interval=300):
@@ -141,9 +142,8 @@ class BackgroundScanner:
 # --- بخش اجرایی اصلی ---
 async def main():
     # --- تنظیمات ---
-    BOT_TOKEN = "8261343183:AAE6RQHdSU54Xc86EfYFDoUtObkmT1RBBXM"
-    # آیدی عددی چت یا کانال خود را در اینجا قرار دهید
-    CHAT_ID = "1951665139" 
+    BOT_TOKEN = Config.BOT_TOKEN
+    CHAT_ID = Config.CHAT_ID
     SCAN_INTERVAL = 300  # 5 minutes
 
     if CHAT_ID == "YOUR_CHAT_ID":

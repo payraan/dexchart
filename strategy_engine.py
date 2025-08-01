@@ -1,13 +1,12 @@
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-import sqlite3
+from database_manager import db_manager
 from analysis_engine import AnalysisEngine
 
 class StrategyEngine:
-   def __init__(self, db_path="tokens.db"):
-       self.db_path = db_path
-       self.analysis_engine = AnalysisEngine(db_path)
+   def __init__(self):
+       self.analysis_engine = AnalysisEngine()
 
    async def detect_breakout_signal(self, token_address, pool_id, symbol):
        """
@@ -112,17 +111,26 @@ class StrategyEngine:
        return None
 
    async def save_alert(self, signal):
-       """Save alert to database"""
-       conn = sqlite3.connect(self.db_path)
-       cursor = conn.cursor()
+        """Save alert to the database using the new db_manager."""
+        
+        params = (
+            signal['token_address'], 
+            signal['signal_type'],
+            signal['timestamp'], 
+            signal['current_price']
+        )
 
-       cursor.execute('''
-           INSERT INTO alert_history
-           (token_address, alert_type, timestamp, price_at_alert)
-           VALUES (?, ?, ?, ?)
-       ''', (signal['token_address'], signal['signal_type'],
-             signal['timestamp'], signal['current_price']))
-
-       conn.commit()
-       conn.close()
-       print(f"💾 Alert saved to database for {signal['symbol']}")
+        # placeholder مناسب را بر اساس نوع دیتابیس انتخاب می‌کند
+        placeholder = "%s" if db_manager.is_postgres else "?"
+        
+        query = f'''
+            INSERT INTO alert_history
+            (token_address, alert_type, timestamp, price_at_alert)
+            VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder})
+        '''
+        
+        try:
+            db_manager.execute(query, params)
+            print(f"💾 Alert saved to database for {signal['symbol']}")
+        except Exception as e:
+            print(f"Error in save_alert: {e}")

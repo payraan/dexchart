@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      # خواندن اطلاعات از فایل .env
+      POSTGRES_DB: ${POSTGRES_DB:-dexchart}
+      POSTGRES_USER: ${POSTGRES_USER:-dexchart_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dexchart_pass}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  bot:
+    build: .
+    # تمام متغیرهای مورد نیاز را از .env می‌خواند
+    env_file:
+      - .env
+    depends_on:
+      - postgres
+      - redis
+    command: python telegram_bot.py
+
+  scanner:
+    build: .
+    # این سرویس هم از همان .env استفاده می‌کند
+    env_file:
+      - .env
+    depends_on:
+      - postgres
+      - redis
+    command: python background_scanner.py
+
+volumes:
+  postgres_data:

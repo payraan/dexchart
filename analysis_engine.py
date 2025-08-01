@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-import sqlite3
+from database_manager import db_manager
 import httpx  # اضافه شده به imports
 from token_cache import TokenCache
 from scipy.signal import argrelextrema
@@ -12,9 +12,8 @@ import io
 from datetime import datetime, timedelta
 
 class AnalysisEngine:
-    def __init__(self, db_path="tokens.db"):
-        self.db_path = db_path
-        self.token_cache = TokenCache(db_path)
+    def __init__(self):
+        self.token_cache = TokenCache()
 
     def calculate_rsi(self, prices, period=14):
         """Calculate RSI indicator"""
@@ -91,20 +90,31 @@ class AnalysisEngine:
         return True
 
     def save_indicator_status(self, token_address, price_vs_ema200, rsi_14, macd_signal, volume_avg_20):
-        """Save indicator status to database"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-                    
+        """Save indicator status to the database using the db_manager."""
         current_time = datetime.now().isoformat()
-                        
-        cursor.execute('''
-            INSERT OR REPLACE INTO indicator_status
-            (token_address, price_vs_ema200, rsi_14, macd_signal, volume_avg_20, last_updated)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (token_address, price_vs_ema200, rsi_14, macd_signal, volume_avg_20, current_time))
-                            
-        conn.commit()
-        conn.close()
+        params = (token_address, price_vs_ema200, rsi_14, macd_signal, volume_avg_20, current_time)
+
+        if db_manager.is_postgres:
+            # سینتکس صحیح PostgreSQL برای عملیات "upsert"
+            query = """
+                INSERT INTO indicator_status (token_address, price_vs_ema200, rsi_14, macd_signal, volume_avg_20, last_updated)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (token_address) DO UPDATE SET
+                    price_vs_ema200 = EXCLUDED.price_vs_ema200,
+                    rsi_14 = EXCLUDED.rsi_14,
+                    macd_signal = EXCLUDED.macd_signal,
+                    volume_avg_20 = EXCLUDED.volume_avg_20,
+                    last_updated = EXCLUDED.last_updated;
+            """
+        else:
+            # سینتکس صحیح SQLite
+            query = """
+                INSERT OR REPLACE INTO indicator_status (token_address, price_vs_ema200, rsi_14, macd_signal, volume_avg_20, last_updated)
+                VALUES (?, ?, ?, ?, ?, ?);
+            """
+        
+        # اجرای کوئری با پارامترهای جداگانه برای امنیت و کارایی
+        db_manager.execute(query, params)
 
     def calculate_atr(self, df, period=14):
         """Calculate Average True Range"""

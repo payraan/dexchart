@@ -11,8 +11,9 @@ import io
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, MessageHandler, filters, ContextTypes, CallbackQueryHandler, CommandHandler
 from token_cache import TokenCache
+from config import Config
 
-BOT_TOKEN = "8261343183:AAE6RQHdSU54Xc86EfYFDoUtObkmT1RBBXM"
+BOT_TOKEN = Config.BOT_TOKEN
 # Initialize token cache
 token_cache = TokenCache()
 

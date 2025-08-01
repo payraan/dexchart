@@ -63,53 +63,60 @@ class BackgroundScanner:
             print(f"❌ خطایی در ارسال هشدار به تلگرام رخ داد: {e}")
 
     async def scan_tokens(self):
-        """تمام توکن‌ها را برای یافتن سیگنال اسکن می‌کند."""
-        print(f"🔍 [{datetime.now().strftime('%H:%M:%S')}] شروع اسکن پس‌زمینه...")
-    
-        # Get combination of trending + watchlist tokens
-        trending_tokens = self.token_cache.get_trending_tokens(limit=50)
-        watchlist_tokens = self.token_cache.get_watchlist_tokens(limit=150)
-    
-        # Combine both lists (trending first for priority)
-        tokens = trending_tokens + watchlist_tokens
-    
-        # Remove duplicates while keeping order
-        seen_addresses = set()
-        unique_tokens = []
-        for token in tokens:
-            if token['address'] not in seen_addresses:
-                seen_addresses.add(token['address'])
-                unique_tokens.append(token)
-    
-        tokens = unique_tokens
-    
-        print(f"📊 اسکن {len(trending_tokens)} توکن ترند + {len(watchlist_tokens)} توکن watchlist = {len(tokens)} توکن یکتا")
+      """تمام توکن‌ها را برای یافتن سیگنال اسکن می‌کند."""
+      print(f"🔍 [{datetime.now().strftime('%H:%M:%S')}] شروع اسکن پس‌زمینه...")
 
-        if not tokens:
-            print("INFO: هیچ توکنی برای اسکن یافت نشد.")
-            return
+      # Get combination of trending + watchlist tokens
+      trending_tokens = self.token_cache.get_trending_tokens(limit=50)
+      watchlist_tokens = self.token_cache.get_watchlist_tokens(limit=150)
 
-        signals_found = 0
-        for token in tokens:
-            try:
-                signal = await self.strategy_engine.detect_breakout_signal(
-                    token['address'],
-                    token['pool_id'],
-                    token['symbol']
-                )
+      # Combine both lists (trending first for priority)
+      tokens = trending_tokens + watchlist_tokens
 
-                if signal:
-                    signals_found += 1
-                    # ابتدا سیگنال را در دیتابیس ذخیره کن
-                    await self.strategy_engine.save_alert(signal)
-                    # سپس به تلگرام ارسال کن
-                    await self.send_signal_alert(signal)
-                    print(f"✅ سیگنال برای {signal['symbol']} پردازش شد.")
+      # Remove duplicates while keeping order
+      seen_addresses = set()
+      unique_tokens = []
+      for token in tokens:
+          if token['address'] not in seen_addresses:
+              seen_addresses.add(token['address'])
+              unique_tokens.append(token)
 
-            except Exception as e:
-                print(f"❌ خطایی هنگام اسکن {token.get('symbol', 'Unknown')} رخ داد: {e}")
+      tokens = unique_tokens
 
-        print(f"📊 اسکن کامل شد. {signals_found} سیگنال جدید یافت شد.")
+      print(f"📊 اسکن {len(trending_tokens)} توکن ترند + {len(watchlist_tokens)} توکن watchlist = {len(tokens)} توکن یکتا")
+   
+      # DEBUG: نمایش اولین 10 توکن
+      print(f"📋 لیست اولین 10 توکن برای اسکن:")
+      for i, token in enumerate(tokens[:10]):
+          print(f"  {i+1}. {token['symbol']} - {token['address'][:8]}...")
+
+      if not tokens:
+          print("INFO: هیچ توکنی برای اسکن یافت نشد.")
+          return
+
+      signals_found = 0
+      for token in tokens:
+          print(f"🔍 اسکن {token['symbol']}...")
+          try:
+              signal = await self.strategy_engine.detect_breakout_signal(
+                  token['address'],
+                  token['pool_id'],
+                  token['symbol']
+              )
+
+              if signal:
+                  signals_found += 1
+                  # ابتدا سیگنال را در دیتابیس ذخیره کن
+                  await self.strategy_engine.save_alert(signal)
+                  # سپس به تلگرام ارسال کن
+                  await self.send_signal_alert(signal)
+                  print(f"✅ سیگنال برای {signal['symbol']} پردازش شد.")
+
+          except Exception as e:
+              print(f"❌ خطا در اسکن {token.get('symbol', 'Unknown')}: {str(e)[:100]}")
+
+      print(f"📊 اسکن کامل شد. {signals_found} سیگنال جدید یافت شد.")
+
 
     async def start_scanning(self):
         """اسکن مداوم پس‌زمینه را آغاز می‌کند."""

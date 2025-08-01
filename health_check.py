@@ -1,12 +1,18 @@
 from fastapi import FastAPI
-from config import Config
+import os
 
 app = FastAPI()
 
 @app.get("/health")
 def health_check():
-    return {"status": "ok", "bot_configured": bool(Config.BOT_TOKEN)}
+    bot_token_exists = bool(os.getenv("BOT_TOKEN"))
+    return {
+        "status": "ok",
+        "message": "Minimal health check is running successfully!",
+        "bot_token_found": bot_token_exists
+    }
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)

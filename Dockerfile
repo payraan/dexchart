@@ -11,7 +11,7 @@ COPY . .
 
 # Default command (can be overridden)
 #CMD ["uvicorn", "health_check:app", "--host", "0.0.0.0", "--port", "8000"]
-CMD ["python", "-c", "import time; print('>>> Think Tank Test: Container is alive! <<<'); time.sleep(300)"]
+CMD ["python", "health_check.py"]
 
 # Expose port for health check web service
 EXPOSE 8000

@@ -21,9 +21,10 @@ BOT_TOKEN = Config.BOT_TOKEN
 PORT = int(os.getenv("PORT", 8000))
 print(f"🔧 Using PORT: {PORT}")
 
-# Railway URL (automatically generated)
-RAILWAY_URL = f"https://{os.getenv('RAILWAY_PUBLIC_DOMAIN', 'localhost')}"
-WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
+# Railway URL (use environment variable or hardcode)
+RAILWAY_DOMAIN = os.getenv('RAILWAY_PUBLIC_DOMAIN', 'dexchart-production.up.railway.app')
+RAILWAY_URL = f"https://{RAILWAY_DOMAIN}"
+WEBHOOK_PATH = "/webhook/telegram"  # Simplified path
 WEBHOOK_URL = f"{RAILWAY_URL}{WEBHOOK_PATH}"
 
 @asynccontextmanager
@@ -197,7 +198,7 @@ async def health_check():
     """Health check endpoint"""
     return {"status": "ok", "message": "Webhook bot is running"}
 
-@app.post(WEBHOOK_PATH)
+@app.post("/webhook/telegram")
 async def webhook_handler(request: Request):
     """Handle webhook updates from Telegram"""
     try:

@@ -204,6 +204,15 @@ async def webhook_handler(request: Request):
         print(f"❌ Webhook error: {e}")
         return {"status": "error", "message": str(e)}
 
+@app.get("/fetch-tokens")
+async def fetch_tokens():
+    """Manual trigger to fetch trending tokens"""
+    try:
+        tokens = await token_cache.fetch_trending_tokens()
+        return {"status": "success", "count": len(tokens)}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
 if __name__ == "__main__":
     import uvicorn
     print(f"🤖 Starting webhook bot on port {PORT}")

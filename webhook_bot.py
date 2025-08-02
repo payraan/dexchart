@@ -7,6 +7,14 @@ from fastapi import FastAPI, Request
 from telegram import Update, Bot
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
 from config import Config
+import asyncio
+import httpx
+from contextlib import asynccontextmanager
+from analysis_engine import AnalysisEngine
+from background_scanner import BackgroundScanner
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import CallbackQueryHandler, CommandHandler
+from token_cache import TokenCache
 
 # Configuration
 BOT_TOKEN = Config.BOT_TOKEN
@@ -18,38 +26,166 @@ RAILWAY_URL = f"https://{os.getenv('RAILWAY_PUBLIC_DOMAIN', 'localhost')}"
 WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
 WEBHOOK_URL = f"{RAILWAY_URL}{WEBHOOK_PATH}"
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global scanner
+    print("🚀 Application starting up...")
+    
+    # Try to set webhook (will fail on localhost - that's OK)
+    try:
+        await bot.set_webhook(url=WEBHOOK_URL)
+        print(f"🔗 Webhook set to: {WEBHOOK_URL}")
+    except Exception as e:
+        print(f"⚠️ Webhook failed (normal for localhost): {e}")
+    
+    scanner = BackgroundScanner(
+        bot_token=BOT_TOKEN,
+        chat_id=Config.CHAT_ID
+    )
+    asyncio.create_task(scanner.start_scanning())
+    print("🔍 Background scanner started")
+    
+    yield
+    
+    # Cleanup on shutdown
+    print("🛑 Shutting down...")
+    if scanner:
+        scanner.running = False
+    try:
+        await bot.delete_webhook()
+    except:
+        pass
+
 # Create FastAPI app
-app = FastAPI()
+app = FastAPI(lifespan=lifespan)
 
 # Create Telegram bot
 bot = Bot(token=BOT_TOKEN)
 application = Application.builder().bot(bot).build()
+
+# Background scanner instance
+scanner = None
+
+# Token cache instance  
+token_cache = TokenCache()
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle any message"""
     user_message = update.message.text
     await update.message.reply_text(f"✅ Webhook Bot Working! You said: {user_message}")
 
-# Add handler
-application.add_handler(MessageHandler(filters.TEXT, handle_message))
+async def chart_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle token address for chart creation"""
+    message = update.message.text
+    
+    if len(message) == 44 and message.isalnum():
+        context.user_data['token'] = message
+       
+        keyboard = [
+            [InlineKeyboardButton("1M", callback_data="minute_1"),
+             InlineKeyboardButton("5M", callback_data="minute_5"),
+             InlineKeyboardButton("15M", callback_data="minute_15")],
+            [InlineKeyboardButton("1H", callback_data="hour_1"),
+             InlineKeyboardButton("4H", callback_data="hour_4"),
+             InlineKeyboardButton("1D", callback_data="day_1")]
+        ] 
+       
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text("📊 Select timeframe:", reply_markup=reply_markup)
+    else:
+        await update.message.reply_text("Send a valid Solana token address (44 characters)")
 
-@app.on_event("startup")
-async def startup():
-    """Set webhook on startup"""
+async def chart_button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle timeframe button selection"""
+    
+    query = update.callback_query
+    await query.answer()
+    
+    token_address = context.user_data.get('token')
+    if not token_address:
+        await query.message.reply_text("❌ Please send token address first")
+        return
+    
+    # Parse timeframe
+    timeframe_parts = query.data.split('_')
+    timeframe = timeframe_parts[0]
+    aggregate = timeframe_parts[1]
+    
+    display_name = f"{aggregate}{timeframe[0].upper()}"
+    await query.message.reply_text(f"⏳ Creating {display_name} chart...")
+    
     try:
-        await bot.set_webhook(url=WEBHOOK_URL)
-        print(f"🚀 Webhook set to: {WEBHOOK_URL}")
+        analysis_engine = AnalysisEngine()
+        
+        # Find pool and create chart
+        search_url = f"https://api.geckoterminal.com/api/v2/search/pools?query={token_address}"
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.get(search_url)
+            if response.status_code == 200:
+                data = response.json()
+                pools = data.get('data', [])
+                if pools:
+                    best_pool = pools[0]
+                    pool_id = best_pool['id']
+                    
+                    try:
+                        relationships = best_pool.get('relationships', {})
+                        base_token = relationships.get('base_token', {}).get('data', {})
+                        symbol = base_token.get('id', 'Unknown').split('_')[-1]
+                    except:
+                        symbol = "Unknown"
+                    
+                    chart_image = await analysis_engine.create_chart(pool_id, symbol, timeframe, aggregate)
+                    if chart_image:
+                        await query.message.reply_photo(
+                            photo=chart_image,
+                            caption=f"📊 {symbol} {display_name} Chart"
+                        )
+                    else:
+                        await query.message.reply_text("❌ Could not create chart")
+                else:
+                    await query.message.reply_text("❌ Token not found")
+            else:
+                await query.message.reply_text("❌ Token not found")
+                
     except Exception as e:
-        print(f"❌ Failed to set webhook: {e}")
+        await query.message.reply_text(f"❌ Error: {str(e)}")
 
-@app.on_event("shutdown") 
-async def shutdown():
-    """Remove webhook on shutdown"""
+async def trending_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /trending command"""
+    await update.message.reply_text("🔍 Fetching trending tokens...")
+    
     try:
-        await bot.delete_webhook()
-        print("🛑 Webhook deleted")
+        trending_tokens = token_cache.get_trending_tokens(limit=10)
+        
+        if not trending_tokens:
+            await update.message.reply_text("❌ No trending tokens found. Please wait for data to be collected.")
+            return
+        
+        message = "🔥 **Top Trending Solana Tokens:**\n\n"
+        
+        for i, token in enumerate(trending_tokens, 1):
+            symbol = token['symbol']
+            price = token['price_usd']
+            volume = token['volume_24h']
+            
+            message += f"**{i}. {symbol}**\n"
+            message += f"💰 Price: ${price:.6f}\n"
+            message += f"📊 24h Volume: ${volume:,.0f}\n"
+            message += f"📋 `{token['address']}`\n\n"
+        
+        await update.message.reply_text(message, parse_mode='Markdown')
+        
     except Exception as e:
-        print(f"❌ Failed to delete webhook: {e}")
+        await update.message.reply_text(f"❌ Error fetching trending tokens: {str(e)}")
+
+# Add handlers
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chart_message_handler))
+application.add_handler(CallbackQueryHandler(chart_button_callback))
+application.add_handler(CommandHandler("trending", trending_command))
+
+
 
 @app.get("/health")
 async def health_check():

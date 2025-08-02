@@ -131,6 +131,8 @@ async def chart_button_callback(update: Update, context: ContextTypes.DEFAULT_TY
             if response.status_code == 200:
                 data = response.json()
                 pools = data.get('data', [])
+                print(f"🔍 DEBUG: Search URL: {search_url}")
+                print(f"🔍 DEBUG: Found {len(pools)} pools")
                 if pools:
                     best_pool = pools[0]
                     pool_id = best_pool['id']
@@ -154,7 +156,8 @@ async def chart_button_callback(update: Update, context: ContextTypes.DEFAULT_TY
                     await query.message.reply_text("❌ Token not found")
             else:
                 await query.message.reply_text("❌ Token not found")
-                
+                print(f"❌ DEBUG: API request failed with status {response.status_code}")
+
     except Exception as e:
         await query.message.reply_text(f"❌ Error: {str(e)}")
 

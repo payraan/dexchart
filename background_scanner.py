@@ -106,12 +106,19 @@ class BackgroundScanner:
               )
 
               if signal:
-                  signals_found += 1
-                  # ابتدا سیگنال را در دیتابیس ذخیره کن
-                  await self.strategy_engine.save_alert(signal)
-                  # سپس به تلگرام ارسال کن
-                  await self.send_signal_alert(signal)
-                  print(f"✅ سیگنال برای {signal['symbol']} پردازش شد.")
+                  # چک کردن cooldown قبل از ارسال
+                  is_recent = await self.strategy_engine.has_recent_alert(
+                      signal['token_address'], 
+                      signal['current_price']
+                  )
+    
+                  if not is_recent:
+                      signals_found += 1
+                      await self.strategy_engine.save_alert(signal)
+                      await self.send_signal_alert(signal)
+                      print(f"✅ سیگنال برای {signal['symbol']} پردازش شد.")
+                  else:
+                      print(f"🔵 سیگنال {signal['symbol']} به دلیل cooldown رد شد.")
 
           except Exception as e:
               print(f"❌ خطا در اسکن {token.get('symbol', 'Unknown')}: {str(e)[:100]}")

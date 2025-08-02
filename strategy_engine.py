@@ -6,40 +6,120 @@ from analysis_engine import AnalysisEngine
 
 class StrategyEngine:
    def __init__(self):
-       self.analysis_engine = AnalysisEngine()
+       self.analysis_engine = AnalysisEngine()   
 
    async def detect_breakout_signal(self, token_address, pool_id, symbol):
        """
-       سیگنال‌های شکست را با استفاده از تحلیل چند تایم‌فریمی و کیفیت کندل تشخیص می‌دهد.
-       - تایم‌فریم 1H: برای شناسایی سطوح اصلی عرضه.
-       - تایم‌فریم 4H و 1H: برای تایید روند کلی.
-       - تایم‌فریم 15M: برای تشخیص نقطه دقیق شکست و کیفیت آن.
+       سیگنال‌های شکست را با استفاده از یک استراتژی تطبیق‌پذیر تشخیص می‌دهد.
+       - برای توکن‌های جدید: از تایم‌فریم‌های 15M (برای ساختار) و 5M (برای ورود) استفاده می‌کند.
+       - برای توکن‌های بالغ: از تایم‌فریم‌های 1H (برای ساختار) و 15M (برای ورود) استفاده می‌کند.
        """
-       # --- ۱. کانفیگ و تنظیمات ---
-       ZONE_SCORE_MIN = 2.5  # حداقل امتیاز برای یک سطح معتبر
-       VOLUME_SPIKE_MULTIPLIER = 0.3  # حجم باید حداقل 2 برابر میانگین باشد
-       CANDLE_BODY_RATIO_MIN = 0.3  # حداقل 60% کندل باید بدنه باشد
+       print(f"🔄 [START] Analysing {symbol} | Pool: {pool_id}")
 
-       # --- ۲. دریافت دیتا از تایم‌فریم‌های مختلف ---
-       df_1h = await self.analysis_engine.get_historical_data(pool_id, "hour", "1", 200)
-       df_4h = await self.analysis_engine.get_historical_data(pool_id, "hour", "4", 100)
-       df_15m = await self.analysis_engine.get_historical_data(pool_id, "minute", "15", 100)
+       # --- ۱. تشخیص سن توکن و انتخاب استراتژی ---
+       df_1h_test = await self.analysis_engine.get_historical_data(pool_id, "hour", "1", 50)
+       available_1h_data = len(df_1h_test) if df_1h_test is not None and not df_1h_test.empty else 0
+       print(f"📅 [AGE CHECK] Available 1H data points for {symbol}: {available_1h_data}")
 
-       # اطمینان از وجود دیتای کافی
-       if df_1h is None or df_1h.empty or len(df_1h) < 50: return None
-       if df_4h is None or df_4h.empty or len(df_4h) < 10: return None
-       if df_15m is None or df_15m.empty or len(df_15m) < 20: return None
+       is_new_token = available_1h_data < 24  # اگر کمتر از ۲۴ کندل ۱ ساعته داشتیم، توکن جدید است
 
-       # --- ۳. شناسایی سطوح اصلی مقاومت (با استفاده از تایم فریم ۱ ساعته) ---
-       supply_zones, demand_zones = self.analysis_engine.find_major_zones(df_1h, period=5)
-       significant_supply = [zone for zone in supply_zones if zone['score'] >= ZONE_SCORE_MIN]
-       # نواحی پیدا شده را در دیتابیس ذخیره کن
+       # --- ۲. تنظیمات و دریافت داده بر اساس نوع توکن ---
+       if is_new_token:
+           print(f"🆕 [STRATEGY] New token detected. Switching to Low-Timeframe mode.")
+           # استراتژی برای توکن‌های جدید
+           df_structure = await self.analysis_engine.get_historical_data(pool_id, "minute", "15", 100)
+           df_entry = await self.analysis_engine.get_historical_data(pool_id, "minute", "5", 100)
+
+           if df_structure is None or df_structure.empty or len(df_structure) < 20:
+               print(f"❌ [FAIL-NEW] Insufficient 15M data for new token {symbol}.")
+               return None
+           if df_entry is None or df_entry.empty or len(df_entry) < 20:
+               print(f"❌ [FAIL-NEW] Insufficient 5M data for new token {symbol}.")
+               return None
+        
+           print(f"📊 [DATA-NEW] Received {len(df_structure)} 15M candles and {len(df_entry)} 5M candles.")
+           ZONE_SCORE_MIN = 1.0 # برای توکن جدید سخت‌گیری کمتر
+           VOLUME_SPIKE_MULTIPLIER = 1.5
+           CANDLE_BODY_RATIO_MIN = 0.3
+
+       else:
+           print(f"📈 [STRATEGY] Mature token detected. Using Standard mode.")
+           # فراخوانی مجدد برای اطمینان از وجود EMA
+           df_structure = await self.analysis_engine.get_historical_data(pool_id, "hour", "1", 200)
+           df_4h = await self.analysis_engine.get_historical_data(pool_id, "hour", "4", 100)
+           df_entry = await self.analysis_engine.get_historical_data(pool_id, "minute", "15", 100)
+
+           if df_4h is None or df_4h.empty or len(df_4h) < 10 or df_entry is None or df_entry.empty or len(df_entry) < 20:
+               print(f"❌ [FAIL-MATURE] Insufficient data for mature token {symbol}.")
+               return None
+        
+           print(f"📊 [DATA-MATURE] Received {len(df_structure)} 1H, {len(df_4h)} 4H, {len(df_entry)} 15M candles.")
+           ZONE_SCORE_MIN = 1.5 # برای توکن بالغ کمی سخت‌گیرتر
+           VOLUME_SPIKE_MULTIPLIER = 2.0
+           CANDLE_BODY_RATIO_MIN = 0.4
+    
+       # --- ۳. منطق تحلیل یکپارچه ---
+    
+       # شناسایی نواحی بر روی دیتافریم ساختار (1H برای بالغ، 15M برای جدید)
+       supply_zones, demand_zones = self.analysis_engine.find_major_zones(df_structure, period=5)
+       print(f"🔍 [ZONES] Found {len(supply_zones)} supply zones for {symbol} on its primary timeframe.")
        await self.save_market_structure(token_address, supply_zones, 'supply')
        await self.save_market_structure(token_address, demand_zones, 'demand')
-       if not significant_supply:
-           return None
 
-       print(f"🔍 DEBUG {symbol}: Found {len(significant_supply)} supply zones with score 3.5+")
+       significant_supply = [zone for zone in supply_zones if zone['score'] >= ZONE_SCORE_MIN]
+       if not significant_supply:
+           print(f"🔵 [INFO] No zones passed the score threshold for {symbol}.")
+           return None
+    
+       # تایید روند (فقط برای توکن‌های بالغ)
+       if not is_new_token:
+           print(f"🕵️ [TREND CHECK] Checking trend for mature token {symbol}...")
+           last_row = df_structure.iloc[-1]
+           price = last_row['close']
+    
+           # اطمینان از وجود ستون‌های EMA
+           if 'ema_50' not in last_row or 'ema_200' not in last_row or pd.isna(last_row['ema_50']) or pd.isna(last_row['ema_200']):
+               print(f"🟡 [TREND] EMA data not available for {symbol}. Skipping trend check.")
+           else:
+               ema_50 = last_row['ema_50']
+               ema_200 = last_row['ema_200']
+        
+               is_uptrend = price > ema_50 and ema_50 > ema_200
+        
+               if not is_uptrend:
+                   print(f"❌ [TREND] Not a clear uptrend for {symbol}. Price: {price:.4f}, EMA50: {ema_50:.4f}, EMA200: {ema_200:.4f}. Signal rejected.")
+                   return None
+               print(f"✅ [TREND] Clear uptrend confirmed for {symbol}.")
+    
+       # بررسی دقیق شکست بر روی دیتافریم ورود (15M برای بالغ، 5M برای جدید)
+       last_candle_entry = df_entry.iloc[-1]
+       avg_volume_entry = df_entry['volume'].rolling(window=20).mean().iloc[-1]
+
+       if pd.isna(avg_volume_entry) or avg_volume_entry <= 0: return None
+
+       for zone in significant_supply:
+           zone_price = zone['avg_price']
+        
+           if last_candle_entry['close'] <= zone_price: continue
+
+           volume_ratio = last_candle_entry['volume'] / avg_volume_entry
+           if volume_ratio < VOLUME_SPIKE_MULTIPLIER: continue
+        
+           candle_range = last_candle_entry['high'] - last_candle_entry['low']
+           body_ratio = abs(last_candle_entry['close'] - last_candle_entry['open']) / candle_range if candle_range > 0 else 0
+           if body_ratio < CANDLE_BODY_RATIO_MIN: continue
+
+           print(f"🚀✅ [SUCCESS] BREAKOUT SIGNAL DETECTED for {symbol}!")
+           return {
+               'token_address': token_address, 'pool_id': pool_id, 'symbol': symbol,
+               'signal_type': 'adaptive_breakout', 'current_price': last_candle_entry['close'],
+               'resistance_level': zone_price, 'zone_score': zone['score'],
+               'volume_ratio': volume_ratio, 'timestamp': datetime.now().isoformat()
+           }
+
+       print(f"🔵 [INFO] No valid breakout signal found for {symbol} in this scan.")
+       return None
+
 
        # --- ۴. تایید روند در تایم‌فریم‌های بالاتر ---
        last_candle_1h = df_1h.iloc[-1]
@@ -199,3 +279,39 @@ class StrategyEngine:
            print(f"💾 {len(zones)} ناحیه {level_type} برای {token_address[:8]}... در دیتابیس ذخیره شد.")
        except Exception as e:
            print(f"Error in save_market_structure: {e}")
+
+   async def has_recent_alert(self, token_address, current_price, cooldown_hours=4, price_proximity_percent=2.0):
+       """
+       چک می‌کند که آیا برای یک توکن در چند ساعت گذشته و در یک محدوده قیمتی مشابه، هشداری ثبت شده است یا خیر.
+       """
+       from datetime import datetime, timedelta
+
+       placeholder = "%s" if db_manager.is_postgres else "?"
+    
+       # محاسبه آستانه قیمت
+       price_threshold = (price_proximity_percent / 100.0)
+       lower_bound_expr = f"{placeholder} * (1 - {placeholder})"
+       upper_bound_expr = f"{placeholder} * (1 + {placeholder})"
+    
+       # محاسبه زمان برای دوره Cooldown
+       cooldown_time_str = (datetime.now() - timedelta(hours=cooldown_hours)).isoformat()
+
+       query = f"""
+           SELECT timestamp FROM alert_history
+           WHERE token_address = {placeholder}
+           AND price_at_alert BETWEEN ({lower_bound_expr}) AND ({upper_bound_expr})
+           AND timestamp > {placeholder}
+           LIMIT 1
+       """
+    
+       params = (token_address, current_price, price_threshold, current_price, price_threshold, cooldown_time_str)
+
+       try:
+           result = db_manager.fetchone(query, params)
+           if result:
+               print(f"🔵 [COOLDOWN] Recent alert found for {token_address}. Skipping.")
+               return True
+           return False
+       except Exception as e:
+           print(f"❌ Error in has_recent_alert: {e}")
+           return False

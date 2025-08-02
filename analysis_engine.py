@@ -57,7 +57,14 @@ class AnalysisEngine:
                     df = pd.DataFrame(df_data)
                     if not df.empty:
                         df = df.sort_values('timestamp').reset_index(drop=True)
-                    return df
+
+                        # محاسبه EMA ها
+                        if len(df) >= 50:
+                            df['ema_50'] = df['close'].ewm(span=50, adjust=False).mean()
+                        if len(df) >= 200:
+                            df['ema_200'] = df['close'].ewm(span=200, adjust=False).mean()
+
+                        return df
         except Exception as e:
             print(f"Error fetching historical data: {e}")
 
@@ -150,133 +157,118 @@ class AnalysisEngine:
         return supply_fractals, demand_fractals
 
     def find_major_zones(self, df, period=5):
-        """Find major support and resistance zones"""
-        if len(df) < 30:  # حداقل داده لازم
-            return [], []
-        
-        # محاسبه ATR
-        atr = self.calculate_atr(df, period=14)
-        
-        # پیدا کردن تمام فرکتال‌ها
-        highs = df['high'].values
-        lows = df['low'].values
-        supply_fractals, demand_fractals = self.find_fractals(highs, lows, period=period)
-        
-        # محاسبه امتیاز برای هر فرکتال
-        major_supply = []
-        major_demand = []
+         """
+         نواحی اصلی حمایت و مقاومت را با استفاده از یک سیستم امتیازدهی پیشرفته پیدا می‌کند.
+         معیارهای امتیازدهی:
+         - قدرت واکنش (Reaction Strength): حرکت قیمت پس از برخورد.
+         - تعداد برخورد (Touch Count): تعداد تست‌های ناحیه.
+         - حجم معاملات (Volume Score): حجم در نقاط برخورد.
+         - گستره زمانی (Time Span): فاصله زمانی بین اولین و آخرین برخورد.
+         """
+         if len(df) < 30:
+             return [], []
 
-        # امتیازدهی به فرکتال‌های عرضه (Supply)
-        for idx in supply_fractals:
-            if idx + 5 < len(df) and not pd.isna(atr.iloc[idx]):
-                zone_price = df.iloc[idx]['high']
-                
-                # محاسبه قدرت واکنش (5 کندل بعدی)
-                price_move = abs(df.iloc[idx]['high'] - df.iloc[idx+5]['close'])
-                reaction_strength = price_move / atr.iloc[idx] if atr.iloc[idx] > 0 else 0
-                
-                # محاسبه حجم میانگین در نقطه برخورد
-                volume_score = df.iloc[idx]['volume'] / df['volume'].mean() if df['volume'].mean() > 0 else 1
-                
-                # ذخیره اطلاعات فرکتال
-                major_supply.append({
-                    'index': idx,
-                    'price': zone_price,
-                    'reaction_strength': reaction_strength,
-                    'volume_score': volume_score
-                })
+         atr = self.calculate_atr(df, period=14)
+         avg_atr = atr.mean()
+         if avg_atr == 0: return [], []
 
-        # امتیازدهی به فرکتال‌های تقاضا (Demand)
-        for idx in demand_fractals:
-            if idx + 5 < len(df) and not pd.isna(atr.iloc[idx]):
-                zone_price = df.iloc[idx]['low']
-                
-                # محاسبه قدرت واکنش (5 کندل بعدی)
-                price_move = abs(df.iloc[idx]['low'] - df.iloc[idx+5]['close'])
-                reaction_strength = price_move / atr.iloc[idx] if atr.iloc[idx] > 0 else 0
-                
-                # محاسبه حجم میانگین در نقطه برخورد
-                volume_score = df.iloc[idx]['volume'] / df['volume'].mean() if df['volume'].mean() > 0 else 1
-                
-                # ذخیره اطلاعات فرکتال
-                major_demand.append({
-                    'index': idx,
-                    'price': zone_price,
-                    'reaction_strength': reaction_strength,
-                    'volume_score': volume_score
-                })
+         highs = df['high']
+         lows = df['low']
+    
+         # پیدا کردن تمام نقاط سقف و کف محلی (فرکتال‌ها)
+         supply_fractals_indices, demand_fractals_indices = self.find_fractals(highs, lows, period=period)
 
-        # خوشه‌بندی و امتیازدهی نهایی برای Supply
-        supply_clusters = []
-        for zone in major_supply:
-            # پیدا کردن خوشه مناسب (تلرانس 0.5%)
-            found_cluster = False
-            for cluster in supply_clusters:
-                if abs(zone['price'] - cluster['avg_price']) / cluster['avg_price'] < 0.005:
-                    cluster['zones'].append(zone)
-                    cluster['avg_price'] = sum(z['price'] for z in cluster['zones']) / len(cluster['zones'])
-                    found_cluster = True
-                    break
-            
-            if not found_cluster:
-                supply_clusters.append({
-                    'zones': [zone],
-                    'avg_price': zone['price']
-                })
-
-        # خوشه‌بندی و امتیازدهی نهایی برای Demand
-        demand_clusters = []
-        for zone in major_demand:
-            # پیدا کردن خوشه مناسب (تلرانس 0.5%)
-            found_cluster = False
-            for cluster in demand_clusters:
-                if abs(zone['price'] - cluster['avg_price']) / cluster['avg_price'] < 0.005:
-                    cluster['zones'].append(zone)
-                    cluster['avg_price'] = sum(z['price'] for z in cluster['zones']) / len(cluster['zones'])
-                    found_cluster = True
-                    break
-            
-            if not found_cluster:
-                demand_clusters.append({
-                    'zones': [zone],
-                    'avg_price': zone['price']
-                })
-
-        # محاسبه امتیاز نهایی برای هر خوشه Supply
-        for cluster in supply_clusters:
-            zones = cluster['zones']
-            
-            # وزن‌های امتیازدهی
-            avg_reaction = sum(z['reaction_strength'] for z in zones) / len(zones)
-            touch_count = len(zones)
-            avg_volume = sum(z['volume_score'] for z in zones) / len(zones)
-            time_span = max(z['index'] for z in zones) - min(z['index'] for z in zones) + 1
-            
-            # امتیاز نهایی (وزن‌دار)
-            final_score = (0.4 * avg_reaction) + (0.3 * touch_count) + (0.2 * avg_volume) + (0.1 * time_span/10)
-            cluster['score'] = final_score
+         # --- ۱. خوشه‌بندی نواحی ---
+         # خوشه‌بندی نواحی عرضه (Resistance)
+         supply_clusters = []
+         for idx in supply_fractals_indices:
+             price = highs.iloc[idx]
+             # تلرانس خوشه بر اساس ATR (پویاتر از درصد ثابت)
+             cluster_tolerance = avg_atr * 0.5 
         
-        # محاسبه امتیاز نهایی برای هر خوشه Demand
-        for cluster in demand_clusters:
-            zones = cluster['zones']
-            
-            avg_reaction = sum(z['reaction_strength'] for z in zones) / len(zones)
-            touch_count = len(zones)
-            avg_volume = sum(z['volume_score'] for z in zones) / len(zones)
-            time_span = max(z['index'] for z in zones) - min(z['index'] for z in zones) + 1
-            
-            final_score = (0.4 * avg_reaction) + (0.3 * touch_count) + (0.2 * avg_volume) + (0.1 * time_span/10)
-            cluster['score'] = final_score
+             found_cluster = False
+             for cluster in supply_clusters:
+                 if abs(price - cluster['avg_price']) < cluster_tolerance:
+                     cluster['fractals'].append({'index': idx, 'price': price})
+                     cluster['avg_price'] = sum(f['price'] for f in cluster['fractals']) / len(cluster['fractals'])
+                     found_cluster = True
+                     break
+             if not found_cluster:
+                 supply_clusters.append({'fractals': [{'index': idx, 'price': price}], 'avg_price': price})
 
-        # انتخاب 2 برترین خوشه از هر نوع
-        supply_clusters.sort(key=lambda x: x['score'], reverse=True)
-        demand_clusters.sort(key=lambda x: x['score'], reverse=True)
+         # خوشه‌بندی نواحی تقاضا (Support)
+         demand_clusters = []
+         for idx in demand_fractals_indices:
+             price = lows.iloc[idx]
+             cluster_tolerance = avg_atr * 0.5
+
+             found_cluster = False
+             for cluster in demand_clusters:
+                 if abs(price - cluster['avg_price']) < cluster_tolerance:
+                     cluster['fractals'].append({'index': idx, 'price': price})
+                     cluster['avg_price'] = sum(f['price'] for f in cluster['fractals']) / len(cluster['fractals'])
+                     found_cluster = True
+                     break
+             if not found_cluster:
+                 demand_clusters.append({'fractals': [{'index': idx, 'price': price}], 'avg_price': price})
+
+         # --- ۲. امتیازدهی به خوشه‌ها ---
+         avg_volume = df['volume'].mean()
+    
+         # امتیازدهی به خوشه‌های عرضه
+         for cluster in supply_clusters:
+             # ۱. تعداد برخورد (هرچه بیشتر، بهتر)
+             touch_count = len(cluster['fractals'])
         
-        # برگرداندن 2 برترین از هر نوع
-        top_supply = supply_clusters[:2] if len(supply_clusters) >= 2 else supply_clusters
-        top_demand = demand_clusters[:2] if len(demand_clusters) >= 2 else demand_clusters
+             # ۲. گستره زمانی (هرچه وسیع‌تر، بهتر)
+             indices = [f['index'] for f in cluster['fractals']]
+             time_span = max(indices) - min(indices) if touch_count > 1 else 1
+
+             # ۳. قدرت واکنش و حجم
+             total_reaction = 0
+             total_volume_score = 0
+             for f in cluster['fractals']:
+                 idx = f['index']
+                 if idx + 5 < len(df):
+                     # قدرت واکنش: قیمت چقدر بعد از ۵ کندل پایین رفته؟
+                     reaction_move = highs.iloc[idx] - df['close'].iloc[idx+5]
+                     total_reaction += reaction_move / atr.iloc[idx] if atr.iloc[idx] > 0 else 0
+                 # امتیاز حجم: حجم در نقطه برخورد چقدر از میانگین بیشتر بوده؟
+                 total_volume_score += df['volume'].iloc[idx] / avg_volume if avg_volume > 0 else 1
+
+             avg_reaction = total_reaction / touch_count if touch_count > 0 else 0
+             avg_volume_score = total_volume_score / touch_count if touch_count > 0 else 0
         
-        return top_supply, top_demand
+             # فرمول امتیاز نهایی (وزن‌دهی شده)
+             score = (touch_count * 0.4) + (time_span * 0.1) + (avg_reaction * 0.3) + (avg_volume_score * 0.2)
+             cluster['score'] = score
+
+         # امتیازدهی به خوشه‌های تقاضا (مشابه عرضه)
+         for cluster in demand_clusters:
+             touch_count = len(cluster['fractals'])
+             indices = [f['index'] for f in cluster['fractals']]
+             time_span = max(indices) - min(indices) if touch_count > 1 else 1
+        
+             total_reaction = 0
+             total_volume_score = 0
+             for f in cluster['fractals']:
+                 idx = f['index']
+                 if idx + 5 < len(df):
+                     reaction_move = df['close'].iloc[idx+5] - lows.iloc[idx]
+                     total_reaction += reaction_move / atr.iloc[idx] if atr.iloc[idx] > 0 else 0
+                 total_volume_score += df['volume'].iloc[idx] / avg_volume if avg_volume > 0 else 1
+            
+             avg_reaction = total_reaction / touch_count if touch_count > 0 else 0
+             avg_volume_score = total_volume_score / touch_count if touch_count > 0 else 0
+
+             score = (touch_count * 0.4) + (time_span * 0.1) + (avg_reaction * 0.3) + (avg_volume_score * 0.2)
+             cluster['score'] = score
+        
+         # مرتب‌سازی بر اساس امتیاز و برگرداندن ۳ ناحیه برتر از هر نوع
+         supply_clusters.sort(key=lambda x: x['score'], reverse=True)
+         demand_clusters.sort(key=lambda x: x['score'], reverse=True)
+    
+         return supply_clusters[:3], demand_clusters[:3]
 
 
     async def get_geckoterminal_ohlcv(self, pool_id, timeframe="hour", aggregate="1"):

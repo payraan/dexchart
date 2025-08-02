@@ -213,6 +213,22 @@ async def fetch_tokens():
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
+@app.get("/webhook-info")
+async def webhook_info():
+    """Check webhook status"""
+    try:
+        webhook_info = await bot.get_webhook_info()
+        return {
+            "url": webhook_info.url,
+            "has_custom_certificate": webhook_info.has_custom_certificate,
+            "pending_update_count": webhook_info.pending_update_count,
+            "last_error_date": webhook_info.last_error_date,
+            "last_error_message": webhook_info.last_error_message,
+            "max_connections": webhook_info.max_connections
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
 if __name__ == "__main__":
     import uvicorn
     print(f"🤖 Starting webhook bot on port {PORT}")

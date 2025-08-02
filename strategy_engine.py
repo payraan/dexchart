@@ -10,66 +10,69 @@ class StrategyEngine:
 
    async def detect_breakout_signal(self, token_address, pool_id, symbol):
        """
-       سیگنال‌های شکست را با استفاده از یک استراتژی تطبیق‌پذیر تشخیص می‌دهد.
-       - برای توکن‌های جدید: از تایم‌فریم‌های 15M (برای ساختار) و 5M (برای ورود) استفاده می‌کند.
-       - برای توکن‌های بالغ: از تایم‌فریم‌های 1H (برای ساختار) و 15M (برای ورود) استفاده می‌کند.
+       لایه اول تحلیل: شناسایی توکن‌هایی که به نواحی کلیدی عرضه (مقاومت) و تقاضا (حمایت) واکنش نشان می‌دهند.
+       - سیگنال Breakout: شکست یک مقاومت مهم.
+       - سیگنال Support-Test: رسیدن قیمت به یک حمایت مهم.
        """
-       print(f"🔄 [START] Analysing {symbol} | Pool: {pool_id}")
+       print(f"🔄 [L1-START] Analysing {symbol} | Pool: {pool_id}")
 
-       # --- ۱. تشخیص سن توکن و انتخاب استراتژی ---
+       # --- ۱. تشخیص سن توکن و انتخاب دیتافریم مناسب ---
        df_1h_test = await self.analysis_engine.get_historical_data(pool_id, "hour", "1", 50)
        available_1h_data = len(df_1h_test) if df_1h_test is not None and not df_1h_test.empty else 0
-       print(f"📅 [AGE CHECK] Available 1H data points for {symbol}: {available_1h_data}")
+       is_new_token = available_1h_data < 24
 
-       is_new_token = available_1h_data < 24  # اگر کمتر از ۲۴ کندل ۱ ساعته داشتیم، توکن جدید است
-
-       # --- ۲. تنظیمات و دریافت داده بر اساس نوع توکن ---
        if is_new_token:
-           print(f"🆕 [STRATEGY] New token detected. Switching to Low-Timeframe mode.")
-           # استراتژی برای توکن‌های جدید
+           print(f"🆕 [L1-STRATEGY] New token. Using 15M for zones, 5M for entry.")
            df_structure = await self.analysis_engine.get_historical_data(pool_id, "minute", "15", 100)
            df_entry = await self.analysis_engine.get_historical_data(pool_id, "minute", "5", 100)
-
-           if df_structure is None or df_structure.empty or len(df_structure) < 20:
-               print(f"❌ [FAIL-NEW] Insufficient 15M data for new token {symbol}.")
-               return None
-           if df_entry is None or df_entry.empty or len(df_entry) < 20:
-               print(f"❌ [FAIL-NEW] Insufficient 5M data for new token {symbol}.")
-               return None
-        
-           print(f"📊 [DATA-NEW] Received {len(df_structure)} 15M candles and {len(df_entry)} 5M candles.")
-           ZONE_SCORE_MIN = 1.0 # برای توکن جدید سخت‌گیری کمتر
-           VOLUME_SPIKE_MULTIPLIER = 1.5
-           CANDLE_BODY_RATIO_MIN = 0.3
-
+           if df_structure is None or df_structure.empty or len(df_structure) < 20: return None
+           if df_entry is None or df_entry.empty or len(df_entry) < 10: return None
        else:
-           print(f"📈 [STRATEGY] Mature token detected. Using Standard mode.")
-           # فراخوانی مجدد برای اطمینان از وجود EMA
+           print(f"📈 [L1-STRATEGY] Mature token. Using 1H for zones, 15M for entry.")
            df_structure = await self.analysis_engine.get_historical_data(pool_id, "hour", "1", 200)
-           df_4h = await self.analysis_engine.get_historical_data(pool_id, "hour", "4", 100)
            df_entry = await self.analysis_engine.get_historical_data(pool_id, "minute", "15", 100)
+           if df_structure is None or df_structure.empty or len(df_structure) < 50: return None
+           if df_entry is None or df_entry.empty or len(df_entry) < 20: return None
 
-           if df_4h is None or df_4h.empty or len(df_4h) < 10 or df_entry is None or df_entry.empty or len(df_entry) < 20:
-               print(f"❌ [FAIL-MATURE] Insufficient data for mature token {symbol}.")
-               return None
-        
-           print(f"📊 [DATA-MATURE] Received {len(df_structure)} 1H, {len(df_4h)} 4H, {len(df_entry)} 15M candles.")
-           ZONE_SCORE_MIN = 1.5 # برای توکن بالغ کمی سخت‌گیرتر
-           VOLUME_SPIKE_MULTIPLIER = 2.0
-           CANDLE_BODY_RATIO_MIN = 0.4
-    
-       # --- ۳. منطق تحلیل یکپارچه ---
-    
-       # شناسایی نواحی بر روی دیتافریم ساختار (1H برای بالغ، 15M برای جدید)
+       # --- ۲. شناسایی نواحی عرضه و تقاضا ---
        supply_zones, demand_zones = self.analysis_engine.find_major_zones(df_structure, period=5)
-       print(f"🔍 [ZONES] Found {len(supply_zones)} supply zones for {symbol} on its primary timeframe.")
        await self.save_market_structure(token_address, supply_zones, 'supply')
        await self.save_market_structure(token_address, demand_zones, 'demand')
 
+       ZONE_SCORE_MIN = 1.0  # حداقل امتیاز برای در نظر گرفتن یک ناحیه
+       last_candle = df_entry.iloc[-1]
+       current_price = last_candle['close']
+
+       # --- ۳. بررسی سیگنال شکست مقاومت (Breakout) ---
        significant_supply = [zone for zone in supply_zones if zone['score'] >= ZONE_SCORE_MIN]
-       if not significant_supply:
-           print(f"🔵 [INFO] No zones passed the score threshold for {symbol}.")
-           return None
+       for zone in significant_supply:
+           zone_price = zone['avg_price']
+           # شرط: آیا قیمت فعلی بالای ناحیه مقاومت است؟
+           if current_price > zone_price:
+               print(f"🚀✅ [L1-SUCCESS] RESISTANCE BREAKOUT DETECTED for {symbol}!")
+               return {
+                   'signal_type': 'resistance_breakout', 'token_address': token_address,
+                   'pool_id': pool_id, 'symbol': symbol, 'current_price': current_price,
+                   'level_broken': zone_price, 'zone_score': zone['score'],
+                   'timestamp': datetime.now().isoformat()
+               }
+
+       # --- ۴. بررسی سیگنال تست حمایت (Support Test) ---
+       significant_demand = [zone for zone in demand_zones if zone['score'] >= ZONE_SCORE_MIN]
+       for zone in significant_demand:
+           zone_price = zone['avg_price']
+           # شرط: آیا قیمت فعلی به ناحیه حمایت بسیار نزدیک است (مثلاً در محدوده ۱.۵٪)؟
+           if abs(current_price - zone_price) / zone_price < 0.015:
+               print(f"🚀✅ [L1-SUCCESS] SUPPORT TEST DETECTED for {symbol}!")
+               return {
+                   'signal_type': 'support_test', 'token_address': token_address,
+                   'pool_id': pool_id, 'symbol': symbol, 'current_price': current_price,
+                   'support_level': zone_price, 'zone_score': zone['score'],
+                   'timestamp': datetime.now().isoformat()
+               }
+
+       print(f"🔵 [L1-INFO] No key event found for {symbol} in this scan.")
+       return None
     
        # تایید روند (فقط برای توکن‌های بالغ)
        if not is_new_token:

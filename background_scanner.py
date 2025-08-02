@@ -38,7 +38,7 @@ class BackgroundScanner:
                 f"**Signal:** `{signal['signal_type']}`\n"
                 f"**Zone Score:** `{signal['zone_score']:.1f}/10`\n"
                 f"**Current Price:** `${signal['current_price']:.6f}`\n"
-                f"**Level Broken:** `${signal.get('resistance_level', signal.get('support_level', 'N/A')):.6f}`\n\n"
+                f"**Level Broken:** `${signal.get('level_broken', signal.get('support_level', 'N/A')):.6f}`\n\n"
                 f"Time: `{signal['timestamp']}`"
             )
         

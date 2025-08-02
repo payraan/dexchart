@@ -11,7 +11,7 @@ import asyncio
 from config import Config
 
 class BackgroundScanner:
-    def __init__(self, bot_token, chat_id, scan_interval=300):
+    def __init__(self, bot_token, chat_id, scan_interval=120):
         self.token_cache = TokenCache()
         self.strategy_engine = StrategyEngine()
         self.bot = Bot(token=bot_token)
@@ -87,7 +87,7 @@ class BackgroundScanner:
       print(f"📊 اسکن {len(trending_tokens)} توکن ترند + {len(watchlist_tokens)} توکن watchlist = {len(tokens)} توکن یکتا")
    
       # DEBUG: نمایش اولین 10 توکن
-      print(f"📋 لیست اولین 10 توکن برای اسکن:")
+      print(f"📋 لیست همه {len(tokens)} توکن برای اسکن:")
       for i, token in enumerate(tokens[:10]):
           print(f"  {i+1}. {token['symbol']} - {token['address'][:8]}...")
 

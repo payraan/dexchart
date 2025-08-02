@@ -16,9 +16,9 @@ class StrategyEngine:
        - تایم‌فریم 15M: برای تشخیص نقطه دقیق شکست و کیفیت آن.
        """
        # --- ۱. کانفیگ و تنظیمات ---
-       ZONE_SCORE_MIN = 3.5  # حداقل امتیاز برای یک سطح معتبر
-       VOLUME_SPIKE_MULTIPLIER = 2.0  # حجم باید حداقل 2 برابر میانگین باشد
-       CANDLE_BODY_RATIO_MIN = 0.6  # حداقل 60% کندل باید بدنه باشد
+       ZONE_SCORE_MIN = 2.5  # حداقل امتیاز برای یک سطح معتبر
+       VOLUME_SPIKE_MULTIPLIER = 0.3  # حجم باید حداقل 2 برابر میانگین باشد
+       CANDLE_BODY_RATIO_MIN = 0.3  # حداقل 60% کندل باید بدنه باشد
 
        # --- ۲. دریافت دیتا از تایم‌فریم‌های مختلف ---
        df_1h = await self.analysis_engine.get_historical_data(pool_id, "hour", "1", 200)
@@ -31,8 +31,11 @@ class StrategyEngine:
        if df_15m is None or df_15m.empty or len(df_15m) < 20: return None
 
        # --- ۳. شناسایی سطوح اصلی مقاومت (با استفاده از تایم فریم ۱ ساعته) ---
-       supply_zones, _ = self.analysis_engine.find_major_zones(df_1h, period=5)
+       supply_zones, demand_zones = self.analysis_engine.find_major_zones(df_1h, period=5)
        significant_supply = [zone for zone in supply_zones if zone['score'] >= ZONE_SCORE_MIN]
+       # نواحی پیدا شده را در دیتابیس ذخیره کن
+       await self.save_market_structure(token_address, supply_zones, 'supply')
+       await self.save_market_structure(token_address, demand_zones, 'demand')
        if not significant_supply:
            return None
 
@@ -45,16 +48,32 @@ class StrategyEngine:
        is_4h_bullish = last_candle_4h['close'] > last_candle_4h['open']
 
        # فقط زمانی روند را بررسی کن که هر دو تایم فریم اصلی قرمز هستند
-       trend_is_strong_bearish = False
-       if not is_1h_bullish and not is_4h_bullish:
-           # بررسی ۳ کندل آخر ۴ ساعته برای سنجش قدرت روند نزولی
-           last_3_candles_4h = df_4h.iloc[-3:]
-           bearish_count = (last_3_candles_4h['close'] < last_3_candles_4h['open']).sum()
-           print(f"🔍 DEBUG {symbol}: آخرین 3 کندل 4H - bearish count: {bearish_count}/3")        
+       # بهبود منطق تشخیص روند
+       strong_bearish_signals = 0
 
-           # اگر حداقل ۲ از ۳ کندل آخر نزولی باشد، روند به طور کلی قوی نزولی است
-           if bearish_count >= 3:  # فقط اگه 3 از 3 کندل قرمز باشن
-               trend_is_strong_bearish = True
+       # اگر کندل ۱ ساعته قرمز باشد، یک امتیاز منفی
+       if not is_1h_bullish: 
+           strong_bearish_signals += 1
+
+       # اگر کندل ۴ ساعته قرمز باشد، یک امتیاز منفی
+       if not is_4h_bullish: 
+           strong_bearish_signals += 1
+
+       # بررسی ۳ کندل آخر ۴ ساعته
+       last_3_candles_4h = df_4h.iloc[-3:]
+       bearish_count = (last_3_candles_4h['close'] < last_3_candles_4h['open']).sum()
+
+       # اگر حداقل ۲ از ۳ کندل آخر ۴ ساعته قرمز باشند، یک امتیاز منفی دیگر
+       if bearish_count >= 2:
+           strong_bearish_signals += 1
+           print(f"🔍 DEBUG {symbol}: روند نزولی در کندل‌های 4H تشخیص داده شد ({bearish_count}/3).")
+
+       # فقط زمانی سیگنال را رد کن که حداقل ۲ از ۳ شرط نزولی برقرار باشد
+       trend_is_strong_bearish = (strong_bearish_signals >= 2)
+
+       if trend_is_strong_bearish:
+           print(f"❌ INFO {symbol}: روند کلی نزولی است (امتیاز منفی: {strong_bearish_signals}). سیگنال رد شد.")
+           return None
 
        if trend_is_strong_bearish:
            print(f"❌ DEBUG {symbol}: روند قوی نزولی در تایم‌فریم بالاتر تشخیص داده شد. سیگنال رد شد.")
@@ -70,42 +89,53 @@ class StrategyEngine:
            return None
 
        # حلقه برای بررسی شکست هر سطح مقاومت
-       for zone in significant_supply:
+       print(f"🔍 [{symbol}] در حال بررسی {len(significant_supply)} ناحیه عرضه معتبر...")
+       for i, zone in enumerate(significant_supply, 1):
            zone_price = zone['avg_price']
+           print(f"  - ناحیه {i}: قیمت={zone_price:.6f}, امتیاز={zone['score']:.1f}")
 
-           # شرط اصلی شکست: آیا آخرین کندل ۱۵ دقیقه بالای سطح بسته شده است؟
-           if last_candle_15m['close'] > zone_price:
-            
-               # شرط تایید ۱: آیا حجم معاملات افزایش چشمگیری داشته؟
-               # نکته: برای تست می‌توانید این خط را موقتاً True قرار دهید
-               volume_spike = last_candle_15m['volume'] > (avg_volume_15m * VOLUME_SPIKE_MULTIPLIER)
+           # شرط ۱: آیا قیمت از ناحیه عبور کرده؟
+           if last_candle_15m['close'] <= zone_price:
+               print(f"    ❌ رد شد: قیمت فعلی ({last_candle_15m['close']:.6f}) هنوز ناحیه را نشکسته است.")
+               continue
 
-               # شرط تایید ۲: آیا کندل شکست، یک کندل قدرتمند است؟
-               candle_high = last_candle_15m['high']
-               candle_low = last_candle_15m['low']
-               candle_body = abs(last_candle_15m['close'] - last_candle_15m['open'])
-               candle_range = candle_high - candle_low
+           print(f"    ✅ تایید: قیمت ناحیه را شکسته است.")
 
-               is_quality_candle = False
-               if candle_range > 0:
-                   body_ratio = candle_body / candle_range
-                   if body_ratio >= CANDLE_BODY_RATIO_MIN:
-                       is_quality_candle = True
+           # شرط ۲: آیا حجم معاملات کافی است؟
+           volume_ratio = last_candle_15m['volume'] / avg_volume_15m
+           volume_spike = True  # موقتاً غیرفعال برای تست
+           if not volume_spike:
+               print(f"    ❌ رد شد: نسبت حجم ({volume_ratio:.2f}) کمتر از حد نیاز ({VOLUME_SPIKE_MULTIPLIER}) بود.")
+               continue
 
-               # --- ۶. تایید نهایی و ارسال سیگنال ---
-               if volume_spike and is_quality_candle:
-                   print(f"✅ BREAKOUT چند تایم‌فریمی برای {symbol}! امتیاز سطح: {zone['score']:.1f}")
-                   return {
-                       'token_address': token_address,
-                       'pool_id': pool_id,
-                       'symbol': symbol,
-                       'signal_type': 'multi_tf_breakout',
-                       'current_price': last_candle_15m['close'],
-                       'resistance_level': zone_price,
-                       'zone_score': zone['score'],
-                       'volume_ratio': last_candle_15m['volume'] / avg_volume_15m,
-                       'timestamp': datetime.now().isoformat()
-                   }
+           print(f"    ✅ تایید: حجم معاملات کافی است (نسبت: {volume_ratio:.2f}).")
+
+           # شرط ۳: آیا کندل شکست باکیفیت است؟
+           candle_high = last_candle_15m['high']
+           candle_low = last_candle_15m['low']
+           candle_body = abs(last_candle_15m['close'] - last_candle_15m['open'])
+           candle_range = candle_high - candle_low
+           body_ratio = candle_body / candle_range if candle_range > 0 else 0
+           is_quality_candle = body_ratio >= CANDLE_BODY_RATIO_MIN
+
+           if not is_quality_candle:
+               print(f"    ❌ رد شد: کیفیت کندل (نسبت بدنه: {body_ratio:.2f}) کمتر از حد نیاز ({CANDLE_BODY_RATIO_MIN}) بود.")
+               continue
+
+           print(f"    ✅ تایید: کندل شکست باکیفیت است (نسبت بدنه: {body_ratio:.2f}).")
+           print(f"🚀✅ سیگنال BREAKOUT برای {symbol} یافت شد!")
+    
+           return {
+               'token_address': token_address,
+               'pool_id': pool_id,
+               'symbol': symbol,
+               'signal_type': 'multi_tf_breakout',
+               'current_price': last_candle_15m['close'],
+               'resistance_level': zone_price,
+               'zone_score': zone['score'],
+               'volume_ratio': volume_ratio,
+               'timestamp': datetime.now().isoformat()
+           }
 
        # اگر هیچ سیگنال معتبری یافت نشد
        return None
@@ -134,3 +164,38 @@ class StrategyEngine:
             print(f"💾 Alert saved to database for {signal['symbol']}")
         except Exception as e:
             print(f"Error in save_alert: {e}")
+
+   async def save_market_structure(self, token_address, zones, level_type):
+       """Save supply/demand zones to market_structure table"""
+       if not zones:
+           return
+
+       current_time = datetime.now().isoformat()
+       data_to_save = []
+       for zone in zones:
+           data_to_save.append((
+               token_address,
+               level_type,
+               zone['avg_price'],
+               zone['score'],
+               current_time,  # last_tested_at
+               current_time   # created_at
+           ))
+
+       # Choose correct placeholder based on database type
+       placeholder = "%s" if db_manager.is_postgres else "?"
+    
+       query = f"""
+           INSERT OR IGNORE INTO market_structure
+           (token_address, level_type, price_level, score, last_tested_at, created_at)
+           VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
+       """
+    
+       if db_manager.is_postgres:
+           query = query.replace('INSERT OR IGNORE', 'INSERT ON CONFLICT DO NOTHING')
+
+       try:
+           db_manager.executemany(query, data_to_save)
+           print(f"💾 {len(zones)} ناحیه {level_type} برای {token_address[:8]}... در دیتابیس ذخیره شد.")
+       except Exception as e:
+           print(f"Error in save_market_structure: {e}")

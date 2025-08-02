@@ -38,6 +38,10 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"⚠️ Webhook failed (normal for localhost): {e}")
     
+    # Initialize telegram application
+    await application.initialize()
+    print("🤖 Telegram application initialized")
+    
     scanner = BackgroundScanner(
         bot_token=BOT_TOKEN,
         chat_id=Config.CHAT_ID
@@ -51,6 +55,7 @@ async def lifespan(app: FastAPI):
     print("🛑 Shutting down...")
     if scanner:
         scanner.running = False
+    await application.shutdown()
     try:
         await bot.delete_webhook()
     except:

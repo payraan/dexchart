@@ -1,12 +1,23 @@
-from database_manager import db_manager
+import os
+import psycopg2
+from config import Config
 
 def migrate_database():
     try:
-        # Add level_price column to existing table
-        db_manager.execute("ALTER TABLE alert_history ADD COLUMN level_price REAL")
+        # Connect to PostgreSQL
+        conn = psycopg2.connect(Config.DATABASE_URL)
+        cursor = conn.cursor()
+        
+        # Add level_price column
+        cursor.execute("ALTER TABLE alert_history ADD COLUMN level_price REAL")
+        conn.commit()
+        
         print("✅ Migration successful: level_price column added")
+        cursor.close()
+        conn.close()
+        
     except Exception as e:
-        print(f"Migration info: {e}")
+        print(f"Migration result: {e}")
 
 if __name__ == "__main__":
     migrate_database()

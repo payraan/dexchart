@@ -137,13 +137,20 @@ class StrategyEngine:
    async def save_alert(self, signal):
         """Save alert to the database, including the specific level price."""
         level_price = signal.get('level_broken', signal.get('support_level', 0))
+        current_price = signal['current_price']
+        
         # Convert numpy types to Python native types
         if hasattr(level_price, 'item'):
             level_price = level_price.item()
+        if hasattr(current_price, 'item'):
+            current_price = current_price.item()
+            
         level_price = float(level_price) if level_price is not None else 0.0
+        current_price = float(current_price)
+        
         params = (
-            signal['token_address'], signal['signal_type'], signal['timestamp'], 
-            signal['current_price'], level_price
+            signal['token_address'], signal['signal_type'], signal['timestamp'],
+            current_price, level_price
         )
         placeholder = "%s" if db_manager.is_postgres else "?"
         query = f'''INSERT INTO alert_history (token_address, alert_type, timestamp, price_at_alert, level_price)
@@ -154,12 +161,18 @@ class StrategyEngine:
         except Exception as e:
             print(f"Error in save_alert: {e}")
 
+
    async def has_recent_alert(self, signal, cooldown_hours=4):
         """Checks for recent alerts for the *same specific level*."""
         from datetime import datetime, timedelta
         
         level_price = signal.get('level_broken', signal.get('support_level'))
         if level_price is None: return False
+
+        # Convert numpy types to Python native types
+        if hasattr(level_price, 'item'):
+            level_price = level_price.item()
+        level_price = float(level_price)
 
         cooldown_time = (datetime.now() - timedelta(hours=cooldown_hours)).isoformat()
         placeholder = "%s" if db_manager.is_postgres else "?"

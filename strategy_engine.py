@@ -137,6 +137,10 @@ class StrategyEngine:
    async def save_alert(self, signal):
         """Save alert to the database, including the specific level price."""
         level_price = signal.get('level_broken', signal.get('support_level', 0))
+        # Convert numpy types to Python native types
+        if hasattr(level_price, 'item'):
+            level_price = level_price.item()
+        level_price = float(level_price) if level_price is not None else 0.0
         params = (
             signal['token_address'], signal['signal_type'], signal['timestamp'], 
             signal['current_price'], level_price

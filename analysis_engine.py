@@ -216,7 +216,7 @@ class AnalysisEngine:
          supply_clusters = []
          for idx in supply_fractals_indices:
              price = highs.iloc[idx]
-             cluster_tolerance = avg_atr * 0.5 
+             cluster_tolerance = avg_atr * 1.0 
         
              found_cluster = False
              for cluster in supply_clusters:

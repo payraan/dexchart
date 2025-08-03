@@ -48,7 +48,7 @@ class StrategyEngine:
         """
         from datetime import datetime
 
-        ZONE_SCORE_MIN = 1.0
+        ZONE_SCORE_MIN = 15.0
         PROXIMITY_THRESHOLD = 0.03  # 3% distance for alerts
 
         # --- Strategy 1, 2, 3: Analyzing Resistance Levels ---
@@ -163,7 +163,7 @@ class StrategyEngine:
 
 
    async def has_recent_alert(self, signal, cooldown_hours=4):
-        """Checks for recent alerts for the *same specific level*."""
+        """Checks for recent alerts for similar price levels with tolerance."""
         from datetime import datetime, timedelta
         
         level_price = signal.get('level_broken', signal.get('support_level'))
@@ -174,16 +174,23 @@ class StrategyEngine:
             level_price = level_price.item()
         level_price = float(level_price)
 
+        # Add tolerance for price comparison (0.5%)
+        tolerance = 0.005
+        price_min = level_price * (1 - tolerance)
+        price_max = level_price * (1 + tolerance)
+
         cooldown_time = (datetime.now() - timedelta(hours=cooldown_hours)).isoformat()
         placeholder = "%s" if db_manager.is_postgres else "?"
         query = f"""SELECT timestamp FROM alert_history 
-                    WHERE token_address = {placeholder} AND level_price = {placeholder} AND timestamp > {placeholder}
+                    WHERE token_address = {placeholder} 
+                    AND level_price BETWEEN {placeholder} AND {placeholder} 
+                    AND timestamp > {placeholder}
                     LIMIT 1"""
-        params = (signal['token_address'], level_price, cooldown_time)
+        params = (signal['token_address'], price_min, price_max, cooldown_time)
 
         try:
             if db_manager.fetchone(query, params):
-                print(f"🔵 [COOLDOWN] Event-based cooldown for {signal['symbol']} at level {level_price:.6f}.")
+                print(f"🔵 [COOLDOWN] Range-based cooldown for {signal['symbol']} at level {level_price:.6f}.")
                 return True
             return False
         except Exception as e:

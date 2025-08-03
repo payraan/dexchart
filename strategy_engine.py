@@ -1,57 +1,57 @@
 import pandas as pd
 import numpy as np
+import logging
 from datetime import datetime, timedelta
 from database_manager import db_manager
 from analysis_engine import AnalysisEngine
+# --- بخش جدید: ایمپورت کردن تنظیمات ---
+from config import TradingConfig 
 
 class StrategyEngine:
-   def __init__(self):
-       self.analysis_engine = AnalysisEngine()   
+    def __init__(self):
+        self.analysis_engine = AnalysisEngine()
+        # استفاده از لاگر به جای پرینت
+        self.logger = logging.getLogger(__name__)
 
-   async def detect_breakout_signal(self, analysis_result, token_address):
-       """New breakout detection using pre-analyzed data"""
-       if not analysis_result:
-           return None
-           
-       # Extract metadata
-       metadata = analysis_result['metadata']
-       symbol = metadata['symbol']
-       pool_id = metadata['pool_id']
-       
-       print(f"🔄 [L1-START] Analysing {symbol} using pre-computed data")
-           
-       # Extract data from analysis result
-       current_price = analysis_result['raw_data']['current_price']
-       supply_zones = analysis_result['technical_levels']['zones']['supply']
-       demand_zones = analysis_result['technical_levels']['zones']['demand']
-       fibonacci_data = analysis_result['technical_levels']['fibonacci']
-       
-       # Check for breakout signals using confluence scoring
-       signal = self._check_confluence_signals(
-           current_price, supply_zones, demand_zones, fibonacci_data,
-           token_address, pool_id, symbol
-       )
-       
-       if signal:
-           # Add analysis_result to signal for chart creation
-           signal['analysis_result'] = analysis_result
-           print(f"🚀✅ [L1-SUCCESS] Signal found for {symbol}!")
-           return signal
-           
-       print(f"🔵 [L1-INFO] No signal found for {symbol}")
-       return None
+    async def detect_breakout_signal(self, analysis_result, token_address):
+        """New breakout detection using pre-analyzed data"""
+        if not analysis_result:
+            return None
+            
+        metadata = analysis_result['metadata']
+        symbol = metadata['symbol']
+        pool_id = metadata['pool_id']
+        
+        self.logger.info(f"🔄 [L1-START] Analysing {symbol} using pre-computed data")
+            
+        current_price = analysis_result['raw_data']['current_price']
+        supply_zones = analysis_result['technical_levels']['zones']['supply']
+        demand_zones = analysis_result['technical_levels']['zones']['demand']
+        fibonacci_data = analysis_result['technical_levels']['fibonacci']
+        
+        signal = self._check_confluence_signals(
+            current_price, supply_zones, demand_zones, fibonacci_data,
+            token_address, pool_id, symbol
+        )
+        
+        if signal:
+            signal['analysis_result'] = analysis_result
+            self.logger.info(f"🚀✅ [L1-SUCCESS] Signal found for {symbol}!")
+            return signal
+            
+        self.logger.info(f"🔵 [L1-INFO] No signal found for {symbol}")
+        return None
 
-   def _check_confluence_signals(self, current_price, supply_zones, demand_zones,
+    def _check_confluence_signals(self, current_price, supply_zones, demand_zones,
                                 fibonacci_data, token_address, pool_id, symbol):
         """
-        Checks for multiple signal types: Proximity, Real-time Breakout, S/R Flip, and Support Test.
+        Checks for multiple signal types using configuration from TradingConfig.
         """
-        from datetime import datetime
+        # --- استفاده از مقادیر TradingConfig ---
+        ZONE_SCORE_MIN = TradingConfig.ZONE_SCORE_MIN
+        PROXIMITY_THRESHOLD = TradingConfig.PROXIMITY_THRESHOLD
 
-        ZONE_SCORE_MIN = 15.0
-        PROXIMITY_THRESHOLD = 0.03  # 3% distance for alerts
-
-        # --- Strategy 1, 2, 3: Analyzing Resistance Levels ---
+        # --- تحلیل نواحی مقاومت ---
         for zone in supply_zones:
             if zone['score'] < ZONE_SCORE_MIN:
                 continue
@@ -59,25 +59,18 @@ class StrategyEngine:
             zone_price = zone['avg_price']
             final_score = self._calculate_confluence_score(zone, zone_price, fibonacci_data)
 
-            # Strategy 1: Proximity to Resistance (Price is BELOW the zone)
             if current_price < zone_price:
                 proximity = (zone_price - current_price) / current_price
                 if proximity < PROXIMITY_THRESHOLD:
                     return self._create_signal_dict('resistance_proximity', locals(), final_score)
-
-            # Strategy 2 & 3: Price is ABOVE the zone
             else:
                 proximity_above = (current_price - zone_price) / zone_price
-
-                # Strategy 2: Real-time Breakout (Price just broke and is very close)
-                if proximity_above < 0.05: # Less than 5% away from the broken level
+                if proximity_above < 0.05:
                     return self._create_signal_dict('resistance_breakout_realtime', locals(), final_score)
-
-                # Strategy 3: S/R Flip Re-test (Price broke, moved away, and came back)
                 elif proximity_above < PROXIMITY_THRESHOLD:
                     return self._create_signal_dict('sr_flip_retest', locals(), final_score)
 
-        # --- Strategy 4: Analyzing Major Support Levels ---
+        # --- تحلیل نواحی حمایت ---
         for zone in demand_zones:
             if zone['score'] < ZONE_SCORE_MIN:
                 continue
@@ -91,7 +84,7 @@ class StrategyEngine:
 
         return None
 
-   def _create_signal_dict(self, signal_type, local_vars, final_score):
+    def _create_signal_dict(self, signal_type, local_vars, final_score):
         """Helper function to create a consistent signal dictionary."""
         from datetime import datetime
         zone = local_vars['zone']
@@ -107,7 +100,6 @@ class StrategyEngine:
             'timestamp': datetime.now().isoformat()
         }
         
-        # Add the specific level price for all signal types
         if 'resistance' in signal_type or 'breakout' in signal_type:
             signal['level_broken'] = zone['avg_price']
         elif 'support' in signal_type or 'retest' in signal_type:
@@ -115,7 +107,7 @@ class StrategyEngine:
             
         return signal
 
-   def _calculate_confluence_score(self, zone, zone_price, fibonacci_data):
+    def _calculate_confluence_score(self, zone, zone_price, fibonacci_data):
         """Calculate confluence score between a zone and fibonacci levels."""
         zone_base_score = zone['score']
         fibonacci_bonus = 0.0
@@ -125,25 +117,22 @@ class StrategyEngine:
             for fib_level in key_fib_levels:
                 if fib_level in fibonacci_data['levels']:
                     fib_price = fibonacci_data['levels'][fib_level]
-                    if abs(zone_price - fib_price) / zone_price < 0.005: # 0.5% proximity
-                        fibonacci_bonus = 2.0
+                    # --- استفاده از مقدار TradingConfig ---
+                    if abs(zone_price - fib_price) / zone_price < TradingConfig.FIBONACCI_TOLERANCE:
+                        fibonacci_bonus = 2.0 # این مقدار هم می‌تواند به Config منتقل شود
                         break
         
-        # Trend bonus can be added here later
-        trend_bonus = 0.5
+        trend_bonus = 0.5 # این مقدار هم می‌تواند به Config منتقل شود
         
         return zone_base_score + fibonacci_bonus + trend_bonus
 
-   async def save_alert(self, signal):
+    async def save_alert(self, signal):
         """Save alert to the database, including the specific level price."""
         level_price = signal.get('level_broken', signal.get('support_level', 0))
         current_price = signal['current_price']
         
-        # Convert numpy types to Python native types
-        if hasattr(level_price, 'item'):
-            level_price = level_price.item()
-        if hasattr(current_price, 'item'):
-            current_price = current_price.item()
+        if hasattr(level_price, 'item'): level_price = level_price.item()
+        if hasattr(current_price, 'item'): current_price = current_price.item()
             
         level_price = float(level_price) if level_price is not None else 0.0
         current_price = float(current_price)
@@ -157,24 +146,36 @@ class StrategyEngine:
                     VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})'''
         try:
             db_manager.execute(query, params)
-            print(f"💾 Alert for {signal['symbol']} at level {level_price:.6f} saved.")
+            self.logger.info(f"💾 Alert for {signal['symbol']} at level {level_price:.6f} saved.")
         except Exception as e:
-            print(f"Error in save_alert: {e}")
+            self.logger.error(f"Error in save_alert for {signal['symbol']}: {e}")
 
-
-   async def has_recent_alert(self, signal, cooldown_hours=4):
-        """Checks for recent alerts for similar price levels with tolerance."""
+    # کد تابع has_recent_alert که در مرحله قبل اصلاح شد، در اینجا باید قرار گیرد
+    async def has_recent_alert(self, signal, cooldown_hours=None):
+        """
+        Checks for recent alerts for similar price levels with tolerance.
+        Supports dynamic cooldown based on the signal's timeframe.
+        """
         from datetime import datetime, timedelta
+
+        if cooldown_hours is None:
+            try:
+                timeframe = signal['analysis_result']['metadata']['timeframe']
+                if timeframe == 'minute':
+                    cooldown_hours = 1
+                elif timeframe == 'hour':
+                    cooldown_hours = 4
+                else:
+                    cooldown_hours = 12
+            except (KeyError, TypeError):
+                cooldown_hours = TradingConfig.COOLDOWN_HOURS
         
         level_price = signal.get('level_broken', signal.get('support_level'))
         if level_price is None: return False
 
-        # Convert numpy types to Python native types
-        if hasattr(level_price, 'item'):
-            level_price = level_price.item()
+        if hasattr(level_price, 'item'): level_price = level_price.item()
         level_price = float(level_price)
 
-        # Add tolerance for price comparison (0.5%)
         tolerance = 0.005
         price_min = level_price * (1 - tolerance)
         price_max = level_price * (1 + tolerance)
@@ -190,9 +191,9 @@ class StrategyEngine:
 
         try:
             if db_manager.fetchone(query, params):
-                print(f"🔵 [COOLDOWN] Range-based cooldown for {signal['symbol']} at level {level_price:.6f}.")
+                self.logger.info(f"🔵 [COOLDOWN] Range-based cooldown for {signal['symbol']} at level {level_price:.6f} for {cooldown_hours}h.")
                 return True
             return False
         except Exception as e:
-            print(f"❌ Error in has_recent_alert: {e}")
+            self.logger.error(f"❌ Error in has_recent_alert for {signal['symbol']}: {e}")
             return False

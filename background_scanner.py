@@ -9,6 +9,7 @@ from telegram import Bot
 import io
 import asyncio
 from config import Config
+from database_manager import db_manager
 
 class BackgroundScanner:
     def __init__(self, bot_token, chat_id, scan_interval=120):
@@ -25,6 +26,7 @@ class BackgroundScanner:
             # استخراج اطلاعات از سیگنال آماده
             analysis_result = signal.get('analysis_result')
             symbol = signal['symbol']
+            token_address = signal['token_address']
             
             print(f"🎨 در حال ساخت نمودار برای {symbol}...")
             
@@ -44,22 +46,35 @@ class BackgroundScanner:
                 f"**Level Broken:** `${signal.get('level_broken', signal.get('support_level', 'N/A')):.6f}`\n\n"
                 f"Time: `{signal['timestamp']}`"
             )
-        
+
+            # بازیابی last_message_id برای reply
+            placeholder = "%s" if db_manager.is_postgres else "?"
+            query = f"SELECT last_message_id FROM watchlist_tokens WHERE address = {placeholder}"
+            result = db_manager.fetchone(query, (token_address,))
+            reply_to_message_id = result['last_message_id'] if result and result['last_message_id'] else None
+
+            # ارسال پیام با یا بدون reply
             if chart_image:
-                await self.bot.send_photo(
+                sent_message = await self.bot.send_photo(
                     chat_id=self.chat_id,
                     photo=chart_image,
                     caption=message,
-                    parse_mode='Markdown'
+                    parse_mode='Markdown',
+                    reply_to_message_id=reply_to_message_id
                 )
                 print(f"📊 نمودار + هشدار برای {symbol} ارسال شد.")
             else:
-                await self.bot.send_message(
+                sent_message = await self.bot.send_message(
                     chat_id=self.chat_id,
                     text=message,
-                    parse_mode='Markdown'
+                    parse_mode='Markdown',
+                    reply_to_message_id=reply_to_message_id
                 )
                 print(f"📱 هشدار متنی برای {symbol} ارسال شد.")
+
+            # به‌روزرسانی last_message_id در دیتابیس
+            update_query = f"UPDATE watchlist_tokens SET last_message_id = {placeholder} WHERE address = {placeholder}"
+            db_manager.execute(update_query, (sent_message.message_id, token_address))
             
         except Exception as e:
             print(f"❌ خطایی در ارسال هشدار به تلگرام رخ داد: {e}")

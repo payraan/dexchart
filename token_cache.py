@@ -72,7 +72,8 @@ class TokenCache:
                 pool_id TEXT,
                 first_seen TEXT,
                 last_active TEXT,
-                status TEXT DEFAULT 'active'
+                status TEXT DEFAULT 'active',
+                last_message_id INTEGER DEFAULT NULL
             )
         ''')
         print("✅ Database tables checked/created successfully.")

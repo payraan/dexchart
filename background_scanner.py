@@ -22,95 +22,101 @@ class BackgroundScanner:
     async def send_signal_alert(self, signal):
         """یک هشدار سیگنال همراه با نمودار را به تلگرام ارسال می‌کند."""
         try:
-            # ساخت نمودار برای سیگنال
-            print(f"🎨 در حال ساخت نمودار برای {signal['symbol']}...")
+            # استخراج اطلاعات از سیگنال آماده
+            analysis_result = signal.get('analysis_result')
+            symbol = signal['symbol']
+            
+            print(f"🎨 در حال ساخت نمودار برای {symbol}...")
+            
+            # ساخت نمودار از روی تحلیل آماده
             chart_image = await self.strategy_engine.analysis_engine.create_chart(
-                signal.get('pool_id', ''), 
-                signal['symbol'], 
-                timeframe="hour", 
-                aggregate="1"
+                analysis_result
             )
         
-            # پیام متنی
+            # ساخت پیام
             message = (
                 f"🚀 *MAJOR ZONE BREAKOUT*\n\n"
                 f"**Token:** *{signal['symbol']}*\n"
                 f"**Signal:** `{signal['signal_type']}`\n"
-                f"**Zone Score:** `{signal['zone_score']:.1f}/10`\n"
+                f"**Zone Score:** `{signal.get('zone_score', 0):.1f}/10`\n"
+                f"**Final Score:** `{signal.get('final_score', 0):.1f}/10`\n"
                 f"**Current Price:** `${signal['current_price']:.6f}`\n"
                 f"**Level Broken:** `${signal.get('level_broken', signal.get('support_level', 'N/A')):.6f}`\n\n"
                 f"Time: `{signal['timestamp']}`"
             )
         
             if chart_image:
-                # ارسال نمودار + پیام
                 await self.bot.send_photo(
                     chat_id=self.chat_id,
                     photo=chart_image,
                     caption=message,
                     parse_mode='Markdown'
                 )
-                print(f"📊 نمودار + هشدار برای {signal['symbol']} ارسال شد.")
+                print(f"📊 نمودار + هشدار برای {symbol} ارسال شد.")
             else:
-                # فقط پیام متنی اگر نمودار ساخته نشد
                 await self.bot.send_message(
                     chat_id=self.chat_id,
                     text=message,
                     parse_mode='Markdown'
                 )
-                print(f"📱 هشدار متنی برای {signal['symbol']} ارسال شد.")
+                print(f"📱 هشدار متنی برای {symbol} ارسال شد.")
             
         except Exception as e:
             print(f"❌ خطایی در ارسال هشدار به تلگرام رخ داد: {e}")
 
+
     async def scan_tokens(self):
-      """تمام توکن‌ها را برای یافتن سیگنال اسکن می‌کند."""
+      """تمام توکن‌ها را برای یافتن سیگنال اسکن می‌کند (با معماری جدید و تایم‌فریم پویا)."""
       print(f"🔍 [{datetime.now().strftime('%H:%M:%S')}] شروع اسکن پس‌زمینه...")
 
-      # Get combination of trending + watchlist tokens
       trending_tokens = self.token_cache.get_trending_tokens(limit=50)
       watchlist_tokens = self.token_cache.get_watchlist_tokens(limit=150)
-
-      # Combine both lists (trending first for priority)
       tokens = trending_tokens + watchlist_tokens
-
-      # Remove duplicates while keeping order
+      
       seen_addresses = set()
-      unique_tokens = []
-      for token in tokens:
-          if token['address'] not in seen_addresses:
-              seen_addresses.add(token['address'])
-              unique_tokens.append(token)
+      unique_tokens = [t for t in tokens if t['address'] not in seen_addresses and not seen_addresses.add(t['address'])]
 
-      tokens = unique_tokens
+      print(f"📊 اسکن {len(trending_tokens)} توکن ترند + {len(watchlist_tokens)} توکن watchlist = {len(unique_tokens)} توکن یکتا")
 
-      print(f"📊 اسکن {len(trending_tokens)} توکن ترند + {len(watchlist_tokens)} توکن watchlist = {len(tokens)} توکن یکتا")
-   
-      # DEBUG: نمایش اولین 10 توکن
-      print(f"📋 لیست همه {len(tokens)} توکن برای اسکن:")
-      for i, token in enumerate(tokens[:10]):
-          print(f"  {i+1}. {token['symbol']} - {token['address'][:8]}...")
-
-      if not tokens:
+      if not unique_tokens:
           print("INFO: هیچ توکنی برای اسکن یافت نشد.")
           return
 
       signals_found = 0
-      for token in tokens:
+      for token in unique_tokens:
           print(f"🔍 اسکن {token['symbol']}...")
           try:
-              signal = await self.strategy_engine.detect_breakout_signal(
-                  token['address'],
+              # قدم ۱: تشخیص وضعیت توکن (جدید یا بالغ)
+              df_test = await self.strategy_engine.analysis_engine.get_historical_data(token['pool_id'], "hour", "1", 50)
+              is_new_token = df_test.empty or len(df_test) < 48
+
+              if is_new_token:
+                  print(f"🆕 [STRATEGY] New token detected. Using 15m timeframe.")
+                  timeframe, aggregate = "minute", "15"
+              else:
+                  print(f"📈 [STRATEGY] Mature token detected. Using 1h timeframe.")
+                  timeframe, aggregate = "hour", "1"
+
+              # قدم ۲: انجام تحلیل کامل با تایم‌فریم پویا
+              analysis_result = await self.strategy_engine.analysis_engine.perform_full_analysis(
                   token['pool_id'],
-                  token['symbol']
+                  timeframe=timeframe,
+                  aggregate=aggregate,
+                  symbol=token['symbol']
+              )
+
+              if not analysis_result:
+                  print(f"🔵 [INFO] تحلیل معتبری برای {token['symbol']} یافت نشد.")
+                  continue
+
+              # قدم ۳: ارسال نتیجه تحلیل به موتور استراتژی
+              signal = await self.strategy_engine.detect_breakout_signal(
+                  analysis_result,
+                  token['address']
               )
 
               if signal:
-                  # چک کردن cooldown قبل از ارسال
-                  is_recent = await self.strategy_engine.has_recent_alert(
-                      signal['token_address'], 
-                      signal['current_price']
-                  )
+                  is_recent = await self.strategy_engine.has_recent_alert(signal)
     
                   if not is_recent:
                       signals_found += 1
@@ -121,7 +127,7 @@ class BackgroundScanner:
                       print(f"🔵 سیگنال {signal['symbol']} به دلیل cooldown رد شد.")
 
           except Exception as e:
-              print(f"❌ خطا در اسکن {token.get('symbol', 'Unknown')}: {str(e)[:100]}")
+              print(f"❌ خطا در اسکن {token.get('symbol', 'Unknown')}: {str(e)[:150]}")
 
       print(f"📊 اسکن کامل شد. {signals_found} سیگنال جدید یافت شد.")
 
@@ -131,13 +137,25 @@ class BackgroundScanner:
         self.running = True
         print(f"🚀 اسکنر پس‌زمینه آغاز به کار کرد (هر {self.scan_interval} ثانیه).")
 
+        # --- قدم جدید: دریافت اولیه توکن‌ها برای پر کردن دیتابیس خالی ---
+        print("🔄 در حال دریافت لیست اولیه توکن‌ها برای پر کردن دیتابیس...")
+        try:
+            initial_tokens = await self.token_cache.fetch_trending_tokens()
+            if initial_tokens:
+                print(f"✅ لیست اولیه با {len(initial_tokens)} توکن دریافت و در دیتابیس ذخیره شد.")
+            else:
+                print("⚠️ لیست اولیه توکن‌ها دریافت نشد.")
+        except Exception as e:
+            print(f"❌ خطا در دریافت لیست اولیه توکن‌ها: {e}")
+        # ---------------------------------------------------------
+
         while self.running:
             try:
                 await self.scan_tokens()
                 print(f"⏳ در حال انتظار به مدت {self.scan_interval} ثانیه تا اسکن بعدی...")
                 await asyncio.sleep(self.scan_interval)
             except KeyboardInterrupt:
-                self.running = False # حلقه را متوقف کن
+                self.running = False
             except Exception as e:
                 print(f"❌ خطای اصلی در اسکنر: {e}")
                 print("⏳ انتظار به مدت ۶۰ ثانیه به دلیل خطا...")

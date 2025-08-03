@@ -8,313 +8,167 @@ class StrategyEngine:
    def __init__(self):
        self.analysis_engine = AnalysisEngine()   
 
-   async def detect_breakout_signal(self, token_address, pool_id, symbol):
-       """
-       لایه اول تحلیل: شناسایی توکن‌هایی که به نواحی کلیدی عرضه (مقاومت) و تقاضا (حمایت) واکنش نشان می‌دهند.
-       - سیگنال Breakout: شکست یک مقاومت مهم.
-       - سیگنال Support-Test: رسیدن قیمت به یک حمایت مهم.
-       """
-       print(f"🔄 [L1-START] Analysing {symbol} | Pool: {pool_id}")
-
-       # --- ۱. تشخیص سن توکن و انتخاب دیتافریم مناسب ---
-       df_1h_test = await self.analysis_engine.get_historical_data(pool_id, "hour", "1", 50)
-       available_1h_data = len(df_1h_test) if df_1h_test is not None and not df_1h_test.empty else 0
-       is_new_token = available_1h_data < 24
-
-       if is_new_token:
-           print(f"🆕 [L1-STRATEGY] New token. Using 15M for zones, 5M for entry.")
-           df_structure = await self.analysis_engine.get_historical_data(pool_id, "minute", "15", 100)
-           df_entry = await self.analysis_engine.get_historical_data(pool_id, "minute", "5", 100)
-           if df_structure is None or df_structure.empty or len(df_structure) < 20: return None
-           if df_entry is None or df_entry.empty or len(df_entry) < 10: return None
-       else:
-           print(f"📈 [L1-STRATEGY] Mature token. Using 1H for zones, 15M for entry.")
-           df_structure = await self.analysis_engine.get_historical_data(pool_id, "hour", "1", 200)
-           df_entry = await self.analysis_engine.get_historical_data(pool_id, "minute", "15", 100)
-           if df_structure is None or df_structure.empty or len(df_structure) < 50: return None
-           if df_entry is None or df_entry.empty or len(df_entry) < 20: return None
-
-       # --- ۲. شناسایی نواحی عرضه و تقاضا ---
-       supply_zones, demand_zones = self.analysis_engine.find_major_zones(df_structure, period=5)
-       await self.save_market_structure(token_address, supply_zones, 'supply')
-       await self.save_market_structure(token_address, demand_zones, 'demand')
-
-       ZONE_SCORE_MIN = 1.0  # حداقل امتیاز برای در نظر گرفتن یک ناحیه
-       last_candle = df_entry.iloc[-1]
-       current_price = last_candle['close']
-
-       # --- ۳. بررسی سیگنال شکست مقاومت (Breakout) ---
-       significant_supply = [zone for zone in supply_zones if zone['score'] >= ZONE_SCORE_MIN]
-       for zone in significant_supply:
-           zone_price = zone['avg_price']
-           # شرط: آیا قیمت فعلی بالای ناحیه مقاومت است؟
-           if current_price > zone_price:
-               print(f"🚀✅ [L1-SUCCESS] RESISTANCE BREAKOUT DETECTED for {symbol}!")
-               return {
-                   'signal_type': 'resistance_breakout', 'token_address': token_address,
-                   'pool_id': pool_id, 'symbol': symbol, 'current_price': current_price,
-                   'level_broken': zone_price, 'zone_score': zone['score'],
-                   'timestamp': datetime.now().isoformat()
-               }
-
-       # --- ۴. بررسی سیگنال تست حمایت (Support Test) ---
-       significant_demand = [zone for zone in demand_zones if zone['score'] >= ZONE_SCORE_MIN]
-       for zone in significant_demand:
-           zone_price = zone['avg_price']
-           # شرط: آیا قیمت فعلی به ناحیه حمایت بسیار نزدیک است (مثلاً در محدوده ۱.۵٪)؟
-           if abs(current_price - zone_price) / zone_price < 0.015:
-               print(f"🚀✅ [L1-SUCCESS] SUPPORT TEST DETECTED for {symbol}!")
-               return {
-                   'signal_type': 'support_test', 'token_address': token_address,
-                   'pool_id': pool_id, 'symbol': symbol, 'current_price': current_price,
-                   'support_level': zone_price, 'zone_score': zone['score'],
-                   'timestamp': datetime.now().isoformat()
-               }
-
-       print(f"🔵 [L1-INFO] No key event found for {symbol} in this scan.")
-       return None
-    
-       # تایید روند (فقط برای توکن‌های بالغ)
-       if not is_new_token:
-           print(f"🕵️ [TREND CHECK] Checking trend for mature token {symbol}...")
-           last_row = df_structure.iloc[-1]
-           price = last_row['close']
-    
-           # اطمینان از وجود ستون‌های EMA
-           if 'ema_50' not in last_row or 'ema_200' not in last_row or pd.isna(last_row['ema_50']) or pd.isna(last_row['ema_200']):
-               print(f"🟡 [TREND] EMA data not available for {symbol}. Skipping trend check.")
-           else:
-               ema_50 = last_row['ema_50']
-               ema_200 = last_row['ema_200']
-        
-               is_uptrend = price > ema_50 and ema_50 > ema_200
-        
-               if not is_uptrend:
-                   print(f"❌ [TREND] Not a clear uptrend for {symbol}. Price: {price:.4f}, EMA50: {ema_50:.4f}, EMA200: {ema_200:.4f}. Signal rejected.")
-                   return None
-               print(f"✅ [TREND] Clear uptrend confirmed for {symbol}.")
-    
-       # بررسی دقیق شکست بر روی دیتافریم ورود (15M برای بالغ، 5M برای جدید)
-       last_candle_entry = df_entry.iloc[-1]
-       avg_volume_entry = df_entry['volume'].rolling(window=20).mean().iloc[-1]
-
-       if pd.isna(avg_volume_entry) or avg_volume_entry <= 0: return None
-
-       for zone in significant_supply:
-           zone_price = zone['avg_price']
-        
-           if last_candle_entry['close'] <= zone_price: continue
-
-           volume_ratio = last_candle_entry['volume'] / avg_volume_entry
-           if volume_ratio < VOLUME_SPIKE_MULTIPLIER: continue
-        
-           candle_range = last_candle_entry['high'] - last_candle_entry['low']
-           body_ratio = abs(last_candle_entry['close'] - last_candle_entry['open']) / candle_range if candle_range > 0 else 0
-           if body_ratio < CANDLE_BODY_RATIO_MIN: continue
-
-           print(f"🚀✅ [SUCCESS] BREAKOUT SIGNAL DETECTED for {symbol}!")
-           return {
-               'token_address': token_address, 'pool_id': pool_id, 'symbol': symbol,
-               'signal_type': 'adaptive_breakout', 'current_price': last_candle_entry['close'],
-               'resistance_level': zone_price, 'zone_score': zone['score'],
-               'volume_ratio': volume_ratio, 'timestamp': datetime.now().isoformat()
-           }
-
-       print(f"🔵 [INFO] No valid breakout signal found for {symbol} in this scan.")
+   async def detect_breakout_signal(self, analysis_result, token_address):
+       """New breakout detection using pre-analyzed data"""
+       if not analysis_result:
+           return None
+           
+       # Extract metadata
+       metadata = analysis_result['metadata']
+       symbol = metadata['symbol']
+       pool_id = metadata['pool_id']
+       
+       print(f"🔄 [L1-START] Analysing {symbol} using pre-computed data")
+           
+       # Extract data from analysis result
+       current_price = analysis_result['raw_data']['current_price']
+       supply_zones = analysis_result['technical_levels']['zones']['supply']
+       demand_zones = analysis_result['technical_levels']['zones']['demand']
+       fibonacci_data = analysis_result['technical_levels']['fibonacci']
+       
+       # Check for breakout signals using confluence scoring
+       signal = self._check_confluence_signals(
+           current_price, supply_zones, demand_zones, fibonacci_data,
+           token_address, pool_id, symbol
+       )
+       
+       if signal:
+           # Add analysis_result to signal for chart creation
+           signal['analysis_result'] = analysis_result
+           print(f"🚀✅ [L1-SUCCESS] Signal found for {symbol}!")
+           return signal
+           
+       print(f"🔵 [L1-INFO] No signal found for {symbol}")
        return None
 
+   def _check_confluence_signals(self, current_price, supply_zones, demand_zones,
+                                fibonacci_data, token_address, pool_id, symbol):
+        """
+        Checks for multiple signal types: Proximity, Real-time Breakout, S/R Flip, and Support Test.
+        """
+        from datetime import datetime
 
-       # --- ۴. تایید روند در تایم‌فریم‌های بالاتر ---
-       last_candle_1h = df_1h.iloc[-1]
-       last_candle_4h = df_4h.iloc[-1]
-       is_1h_bullish = last_candle_1h['close'] > last_candle_1h['open']
-       is_4h_bullish = last_candle_4h['close'] > last_candle_4h['open']
+        ZONE_SCORE_MIN = 1.0
+        PROXIMITY_THRESHOLD = 0.03  # 3% distance for alerts
 
-       # فقط زمانی روند را بررسی کن که هر دو تایم فریم اصلی قرمز هستند
-       # بهبود منطق تشخیص روند
-       strong_bearish_signals = 0
+        # --- Strategy 1, 2, 3: Analyzing Resistance Levels ---
+        for zone in supply_zones:
+            if zone['score'] < ZONE_SCORE_MIN:
+                continue
+            
+            zone_price = zone['avg_price']
+            final_score = self._calculate_confluence_score(zone, zone_price, fibonacci_data)
 
-       # اگر کندل ۱ ساعته قرمز باشد، یک امتیاز منفی
-       if not is_1h_bullish: 
-           strong_bearish_signals += 1
+            # Strategy 1: Proximity to Resistance (Price is BELOW the zone)
+            if current_price < zone_price:
+                proximity = (zone_price - current_price) / current_price
+                if proximity < PROXIMITY_THRESHOLD:
+                    return self._create_signal_dict('resistance_proximity', locals(), final_score)
 
-       # اگر کندل ۴ ساعته قرمز باشد، یک امتیاز منفی
-       if not is_4h_bullish: 
-           strong_bearish_signals += 1
+            # Strategy 2 & 3: Price is ABOVE the zone
+            else:
+                proximity_above = (current_price - zone_price) / zone_price
 
-       # بررسی ۳ کندل آخر ۴ ساعته
-       last_3_candles_4h = df_4h.iloc[-3:]
-       bearish_count = (last_3_candles_4h['close'] < last_3_candles_4h['open']).sum()
+                # Strategy 2: Real-time Breakout (Price just broke and is very close)
+                if proximity_above < 0.05: # Less than 5% away from the broken level
+                    return self._create_signal_dict('resistance_breakout_realtime', locals(), final_score)
 
-       # اگر حداقل ۲ از ۳ کندل آخر ۴ ساعته قرمز باشند، یک امتیاز منفی دیگر
-       if bearish_count >= 2:
-           strong_bearish_signals += 1
-           print(f"🔍 DEBUG {symbol}: روند نزولی در کندل‌های 4H تشخیص داده شد ({bearish_count}/3).")
+                # Strategy 3: S/R Flip Re-test (Price broke, moved away, and came back)
+                elif proximity_above < PROXIMITY_THRESHOLD:
+                    return self._create_signal_dict('sr_flip_retest', locals(), final_score)
 
-       # فقط زمانی سیگنال را رد کن که حداقل ۲ از ۳ شرط نزولی برقرار باشد
-       trend_is_strong_bearish = (strong_bearish_signals >= 2)
+        # --- Strategy 4: Analyzing Major Support Levels ---
+        for zone in demand_zones:
+            if zone['score'] < ZONE_SCORE_MIN:
+                continue
 
-       if trend_is_strong_bearish:
-           print(f"❌ INFO {symbol}: روند کلی نزولی است (امتیاز منفی: {strong_bearish_signals}). سیگنال رد شد.")
-           return None
+            zone_price = zone['avg_price']
+            proximity = abs(current_price - zone_price) / zone_price
 
-       if trend_is_strong_bearish:
-           print(f"❌ DEBUG {symbol}: روند قوی نزولی در تایم‌فریم بالاتر تشخیص داده شد. سیگنال رد شد.")
-           return None
-    
-       print(f"✅ DEBUG {symbol}: روند در تایم‌فریم بالاتر تایید شد (1H Bullish: {is_1h_bullish}, 4H Bullish: {is_4h_bullish}).")
+            if proximity < PROXIMITY_THRESHOLD:
+                final_score = self._calculate_confluence_score(zone, zone_price, fibonacci_data)
+                return self._create_signal_dict('support_test', locals(), final_score)
 
-       # --- ۵. بررسی دقیق شکست در تایم فریم ۱۵ دقیقه ---
-       last_candle_15m = df_15m.iloc[-1]
-       avg_volume_15m = df_15m['volume'].rolling(window=20).mean().iloc[-1]
+        return None
 
-       if pd.isna(avg_volume_15m) or avg_volume_15m <= 0:
-           return None
+   def _create_signal_dict(self, signal_type, local_vars, final_score):
+        """Helper function to create a consistent signal dictionary."""
+        from datetime import datetime
+        zone = local_vars['zone']
+        
+        signal = {
+            'signal_type': signal_type,
+            'token_address': local_vars['token_address'],
+            'pool_id': local_vars['pool_id'],
+            'symbol': local_vars['symbol'],
+            'current_price': local_vars['current_price'],
+            'zone_score': zone['score'],
+            'final_score': final_score,
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        # Add the specific level price for all signal types
+        if 'resistance' in signal_type or 'breakout' in signal_type:
+            signal['level_broken'] = zone['avg_price']
+        elif 'support' in signal_type or 'retest' in signal_type:
+            signal['support_level'] = zone['avg_price']
+            
+        return signal
 
-       # حلقه برای بررسی شکست هر سطح مقاومت
-       print(f"🔍 [{symbol}] در حال بررسی {len(significant_supply)} ناحیه عرضه معتبر...")
-       for i, zone in enumerate(significant_supply, 1):
-           zone_price = zone['avg_price']
-           print(f"  - ناحیه {i}: قیمت={zone_price:.6f}, امتیاز={zone['score']:.1f}")
-
-           # شرط ۱: آیا قیمت از ناحیه عبور کرده؟
-           if last_candle_15m['close'] <= zone_price:
-               print(f"    ❌ رد شد: قیمت فعلی ({last_candle_15m['close']:.6f}) هنوز ناحیه را نشکسته است.")
-               continue
-
-           print(f"    ✅ تایید: قیمت ناحیه را شکسته است.")
-
-           # شرط ۲: آیا حجم معاملات کافی است؟
-           volume_ratio = last_candle_15m['volume'] / avg_volume_15m
-           volume_spike = True  # موقتاً غیرفعال برای تست
-           if not volume_spike:
-               print(f"    ❌ رد شد: نسبت حجم ({volume_ratio:.2f}) کمتر از حد نیاز ({VOLUME_SPIKE_MULTIPLIER}) بود.")
-               continue
-
-           print(f"    ✅ تایید: حجم معاملات کافی است (نسبت: {volume_ratio:.2f}).")
-
-           # شرط ۳: آیا کندل شکست باکیفیت است؟
-           candle_high = last_candle_15m['high']
-           candle_low = last_candle_15m['low']
-           candle_body = abs(last_candle_15m['close'] - last_candle_15m['open'])
-           candle_range = candle_high - candle_low
-           body_ratio = candle_body / candle_range if candle_range > 0 else 0
-           is_quality_candle = body_ratio >= CANDLE_BODY_RATIO_MIN
-
-           if not is_quality_candle:
-               print(f"    ❌ رد شد: کیفیت کندل (نسبت بدنه: {body_ratio:.2f}) کمتر از حد نیاز ({CANDLE_BODY_RATIO_MIN}) بود.")
-               continue
-
-           print(f"    ✅ تایید: کندل شکست باکیفیت است (نسبت بدنه: {body_ratio:.2f}).")
-           print(f"🚀✅ سیگنال BREAKOUT برای {symbol} یافت شد!")
-    
-           return {
-               'token_address': token_address,
-               'pool_id': pool_id,
-               'symbol': symbol,
-               'signal_type': 'multi_tf_breakout',
-               'current_price': last_candle_15m['close'],
-               'resistance_level': zone_price,
-               'zone_score': zone['score'],
-               'volume_ratio': volume_ratio,
-               'timestamp': datetime.now().isoformat()
-           }
-
-       # اگر هیچ سیگنال معتبری یافت نشد
-       return None
+   def _calculate_confluence_score(self, zone, zone_price, fibonacci_data):
+        """Calculate confluence score between a zone and fibonacci levels."""
+        zone_base_score = zone['score']
+        fibonacci_bonus = 0.0
+        
+        if fibonacci_data and fibonacci_data.get('levels'):
+            key_fib_levels = [0.382, 0.5, 0.618]
+            for fib_level in key_fib_levels:
+                if fib_level in fibonacci_data['levels']:
+                    fib_price = fibonacci_data['levels'][fib_level]
+                    if abs(zone_price - fib_price) / zone_price < 0.005: # 0.5% proximity
+                        fibonacci_bonus = 2.0
+                        break
+        
+        # Trend bonus can be added here later
+        trend_bonus = 0.5
+        
+        return zone_base_score + fibonacci_bonus + trend_bonus
 
    async def save_alert(self, signal):
-        """Save alert to the database using the new db_manager."""
-        
+        """Save alert to the database, including the specific level price."""
+        level_price = signal.get('level_broken', signal.get('support_level', 0))
         params = (
-            signal['token_address'], 
-            signal['signal_type'],
-            signal['timestamp'], 
-            signal['current_price']
+            signal['token_address'], signal['signal_type'], signal['timestamp'], 
+            signal['current_price'], level_price
         )
-
-        # placeholder مناسب را بر اساس نوع دیتابیس انتخاب می‌کند
         placeholder = "%s" if db_manager.is_postgres else "?"
-        
-        query = f'''
-            INSERT INTO alert_history
-            (token_address, alert_type, timestamp, price_at_alert)
-            VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder})
-        '''
-        
+        query = f'''INSERT INTO alert_history (token_address, alert_type, timestamp, price_at_alert, level_price)
+                    VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})'''
         try:
             db_manager.execute(query, params)
-            print(f"💾 Alert saved to database for {signal['symbol']}")
+            print(f"💾 Alert for {signal['symbol']} at level {level_price:.6f} saved.")
         except Exception as e:
             print(f"Error in save_alert: {e}")
 
-   async def save_market_structure(self, token_address, zones, level_type):
-       """Save supply/demand zones to market_structure table"""
-       if not zones:
-           return
+   async def has_recent_alert(self, signal, cooldown_hours=4):
+        """Checks for recent alerts for the *same specific level*."""
+        from datetime import datetime, timedelta
+        
+        level_price = signal.get('level_broken', signal.get('support_level'))
+        if level_price is None: return False
 
-       current_time = datetime.now().isoformat()
-       data_to_save = []
-       for zone in zones:
-           data_to_save.append((
-               token_address,
-               level_type,
-               zone['avg_price'],
-               zone['score'],
-               current_time,  # last_tested_at
-               current_time   # created_at
-           ))
+        cooldown_time = (datetime.now() - timedelta(hours=cooldown_hours)).isoformat()
+        placeholder = "%s" if db_manager.is_postgres else "?"
+        query = f"""SELECT timestamp FROM alert_history 
+                    WHERE token_address = {placeholder} AND level_price = {placeholder} AND timestamp > {placeholder}
+                    LIMIT 1"""
+        params = (signal['token_address'], level_price, cooldown_time)
 
-       # Choose correct placeholder based on database type
-       placeholder = "%s" if db_manager.is_postgres else "?"
-    
-       query = f"""
-           INSERT OR IGNORE INTO market_structure
-           (token_address, level_type, price_level, score, last_tested_at, created_at)
-           VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
-       """
-    
-       if db_manager.is_postgres:
-           query = query.replace('INSERT OR IGNORE', 'INSERT ON CONFLICT DO NOTHING')
-
-       try:
-           db_manager.executemany(query, data_to_save)
-           print(f"💾 {len(zones)} ناحیه {level_type} برای {token_address[:8]}... در دیتابیس ذخیره شد.")
-       except Exception as e:
-           print(f"Error in save_market_structure: {e}")
-
-   async def has_recent_alert(self, token_address, current_price, cooldown_hours=4, price_proximity_percent=2.0):
-       """
-       چک می‌کند که آیا برای یک توکن در چند ساعت گذشته و در یک محدوده قیمتی مشابه، هشداری ثبت شده است یا خیر.
-       """
-       from datetime import datetime, timedelta
-
-       placeholder = "%s" if db_manager.is_postgres else "?"
-    
-       # محاسبه آستانه قیمت
-       price_threshold = (price_proximity_percent / 100.0)
-       lower_bound_expr = f"{placeholder} * (1 - {placeholder})"
-       upper_bound_expr = f"{placeholder} * (1 + {placeholder})"
-    
-       # محاسبه زمان برای دوره Cooldown
-       cooldown_time_str = (datetime.now() - timedelta(hours=cooldown_hours)).isoformat()
-
-       query = f"""
-           SELECT timestamp FROM alert_history
-           WHERE token_address = {placeholder}
-           AND price_at_alert BETWEEN ({lower_bound_expr}) AND ({upper_bound_expr})
-           AND timestamp > {placeholder}
-           LIMIT 1
-       """
-    
-       params = (token_address, current_price, price_threshold, current_price, price_threshold, cooldown_time_str)
-
-       try:
-           result = db_manager.fetchone(query, params)
-           if result:
-               print(f"🔵 [COOLDOWN] Recent alert found for {token_address}. Skipping.")
-               return True
-           return False
-       except Exception as e:
-           print(f"❌ Error in has_recent_alert: {e}")
-           return False
+        try:
+            if db_manager.fetchone(query, params):
+                print(f"🔵 [COOLDOWN] Event-based cooldown for {signal['symbol']} at level {level_price:.6f}.")
+                return True
+            return False
+        except Exception as e:
+            print(f"❌ Error in has_recent_alert: {e}")
+            return False

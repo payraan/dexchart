@@ -31,14 +31,13 @@ class TokenCache:
 
         # 2. جدول ساختار بازار (سطوح حمایت/مقاومت)
         db_manager.execute(f'''
-            CREATE TABLE IF NOT EXISTS market_structure (
+            CREATE TABLE IF NOT EXISTS alert_history (
                 id {primary_key_type},
                 token_address TEXT,
-                level_type TEXT,
-                price_level REAL,
-                score REAL,
-                last_tested_at TEXT,
-                created_at TEXT
+                alert_type TEXT,
+                timestamp TEXT,
+                price_at_alert REAL,
+                level_price REAL
             )
         ''')
 

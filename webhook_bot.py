@@ -267,21 +267,54 @@ async def get_trending_list():
 async def scanner_status():
     """Get detailed bot status including scanner health, recent signals, and cooldowns."""
     
-    # --- کوئری‌های سازگار با هر دو دیتابیس ---
+    # --- ساخت کوئری سازگار با هر دو دیتابیس ---
     if db_manager.is_postgres:
         # کوئری برای PostgreSQL
         cooldown_check_time = "NOW() - INTERVAL '4 hours'"
+        # در اینجا از type cast استفاده می‌کنیم
+        timestamp_comparison = "timestamp::timestamp" 
     else:
         # کوئری برای SQLite
         cooldown_check_time = "datetime('now', '-4 hours')"
+        # در اینجا از type cast استفاده نمی‌کنیم
+        timestamp_comparison = "timestamp"
 
     last_signals_query = "SELECT * FROM alert_history ORDER BY timestamp DESC LIMIT 5"
+    
+    # کوئری نهایی با استفاده از متغیر ساخته می‌شود
     cooldown_query = f"""
-        SELECT token_address, MAX(timestamp) as last_alert 
-        FROM alert_history 
-        WHERE timestamp > {cooldown_check_time}
+        SELECT token_address, MAX(timestamp) as last_alert
+        FROM alert_history
+        WHERE {timestamp_comparison} > {cooldown_check_time}
         GROUP BY token_address
     """
+
+    try:
+        last_signals = db_manager.fetchall(last_signals_query)
+        active_cooldowns = db_manager.fetchall(cooldown_query)
+
+        return {
+            "scanner_status": {
+                "running": getattr(scanner, 'running', False),
+                "scan_count": getattr(scanner, 'scan_count', 0),
+                "last_scan_time": getattr(scanner, 'last_scan_time', None),
+                "last_error": getattr(scanner, 'last_error', None)
+            },
+            "trading_config": {
+                "zone_score_min": TradingConfig.ZONE_SCORE_MIN,
+                "scan_interval_seconds": Config.SCAN_INTERVAL,
+                "proximity_threshold": TradingConfig.PROXIMITY_THRESHOLD
+            },
+            "cooldown_info": {
+                "tokens_in_cooldown": len(active_cooldowns) if active_cooldowns else 0,
+                "cooldown_details": active_cooldowns
+            },
+            "recent_signals": last_signals
+        }
+    except Exception as e:
+        # این لاگ برای دیباگ کردن بسیار مهم است
+        logging.error(f"Error in /scanner-status endpoint: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
 
     try:
         last_signals = db_manager.fetchall(last_signals_query)

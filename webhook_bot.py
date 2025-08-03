@@ -238,6 +238,29 @@ async def webhook_info():
     except Exception as e:
         return {"error": str(e)}
 
+@app.get("/trending-list")
+async def get_trending_list():
+    """Get detailed list of trending tokens"""
+    try:
+        trending = token_cache.get_trending_tokens(limit=50)
+        
+        result = []
+        for i, token in enumerate(trending, 1):
+            result.append({
+                "rank": i,
+                "symbol": token["symbol"],
+                "address": token["address"][:8] + "...",  # نمایش مختصر آدرس
+                "volume_24h": f"${token['volume_24h']:,.0f}",
+                "price": f"${token['price_usd']:.6f}"
+            })
+        
+        return {
+            "trending_tokens": result,
+            "total_count": len(trending)
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
 if __name__ == "__main__":
     import uvicorn
     print(f"🤖 Starting webhook bot on port {PORT}")

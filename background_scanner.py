@@ -83,52 +83,44 @@ class BackgroundScanner:
         self.last_scan_time = datetime.now().isoformat()
         self.scan_count += 1
         self.logger.info(f"🔍 [SCAN #{self.scan_count}] Starting scan...")
-
+        
         trending_tokens = self.token_cache.get_trending_tokens(limit=50)
         watchlist_tokens = self.token_cache.get_watchlist_tokens(limit=150)
         tokens = trending_tokens + watchlist_tokens
-      
+            
         seen_addresses = set()
         unique_tokens = [t for t in tokens if t['address'] not in seen_addresses and not seen_addresses.add(t['address'])]
-
+                
         self.logger.info(f"📊 Scanning {len(unique_tokens)} unique tokens...")
         signals_found = 0
-
+                
         for token in unique_tokens:
             signal = None
             try:
-                df_hourly = await self.strategy_engine.analysis_engine.get_historical_data(
-                    token['pool_id'], "hour", "1", limit=100
-                )
-                hours_since_launch = len(df_hourly) if df_hourly is not None and not df_hourly.empty else 0
-
-                if 0 < hours_since_launch < 24:
-                    self.logger.info(f"💎 [GEM HUNTER] Routing {token['symbol']} (Age: {hours_since_launch}h)")
-                    df_5min = await self.strategy_engine.analysis_engine.get_historical_data(
-                        token['pool_id'], "minute", "5", limit=300
-                    )
-                    if df_5min is not None and not df_5min.empty and len(df_5min) >= 12:
-                        signal = await self.strategy_engine.detect_gem_momentum_signal(df_5min, token)
-                    else:
-                        self.logger.info(f"⏳ {token['symbol']} is too new, waiting for more 5m data...")
+                timeframe_result = await self.strategy_engine.select_optimal_timeframe(token['pool_id'])
                 
-                elif hours_since_launch >= 24:
-                    # استفاده از Smart Timeframe Router
-                    optimal_timeframe = await self.strategy_engine.select_optimal_timeframe(token['pool_id'])
-    
-                    if optimal_timeframe:
-                        timeframe, aggregate = optimal_timeframe
-                        self.logger.info(f"📈 [SMART] Routing {token['symbol']} (Age: {hours_since_launch}h) → {aggregate}{timeframe[0].upper()}")
-        
+                if timeframe_result[0]:
+                    timeframe_data, cached_df = timeframe_result
+                    timeframe, aggregate = timeframe_data
+                    hours_available = len(cached_df) if cached_df is not None else 0
+                
+                    if hours_available < 24:
+                        self.logger.info(f"💎 [GEM HUNTER] Routing {token['symbol']} (Age: {hours_available}h)")
+                        df_5min = await self.strategy_engine.analysis_engine.get_historical_data(
+                            token['pool_id'], "minute", "5", limit=300
+                        )
+                        if df_5min is not None and not df_5min.empty and len(df_5min) >= 12:
+                            signal = await self.strategy_engine.detect_gem_momentum_signal(df_5min, token)
+                        else:
+                            self.logger.info(f"⏳ {token['symbol']} is too new, waiting for more 5m data...")
+                    else:
+                        self.logger.info(f"📈 [SMART] Routing {token['symbol']} (Age: {hours_available}h) → {aggregate}{timeframe[0].upper()}")
                         analysis_result = await self.strategy_engine.analysis_engine.perform_full_analysis(
                             token['pool_id'], timeframe, aggregate, token['symbol']
                         )
-                    else:
-                        analysis_result = None
-
-                    if analysis_result:
-                        signal = await self.strategy_engine.detect_breakout_signal(analysis_result, token['address'])
-                
+                        if analysis_result:
+                            signal = await self.strategy_engine.detect_breakout_signal(analysis_result, token['address'])
+                    
                 if signal:
                     is_recent = await self.strategy_engine.has_recent_alert(signal)
                     if not is_recent:
@@ -143,8 +135,8 @@ class BackgroundScanner:
                 self.last_error = str(e)
                 self.logger.error(f"❌ Error scanning {token.get('symbol', 'Unknown')}: {e}", exc_info=True)
 
-            await asyncio.sleep(2.5)  # 2.5 second delay
-        
+            await asyncio.sleep(2.5)  # delay
+            
         self.logger.info(f"📊 Scan #{self.scan_count} complete. {signals_found} new signals found.")
 
     async def start_scanning(self):

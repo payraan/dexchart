@@ -15,28 +15,31 @@ class StrategyEngine:
  
     async def select_optimal_timeframe(self, pool_id):
         """
-        انتخاب تایم‌فریم بهینه بر اساس عمر توکن
+        انتخاب تایم‌فریم بهینه + برگرداندن data برای استفاده مجدد
         """
         try:
-            # بررسی عمر توکن با تایم‌فریم 1 ساعته
+            # یک بار API call
             df_1h = await self.analysis_engine.get_historical_data(
                 pool_id, "hour", "1", limit=100
             )
             hours_available = len(df_1h) if df_1h is not None and not df_1h.empty else 0
         
             if hours_available == 0:
-                return None  # داده کافی وجود ندارد
+                return None, None
             
-            if hours_available < 24:  # کمتر از یک روز
-                return ("minute", "5")
-            elif hours_available < 72:  # کمتر از 3 روز
-                return ("minute", "15")
-            else:  # بیشتر از 3 روز
-                return ("hour", "4")
+            if hours_available < 24:
+                timeframe_data = ("minute", "5")
+            elif hours_available < 72:
+                timeframe_data = ("minute", "15")
+            else:
+                timeframe_data = ("hour", "4")
+            
+            # برگرداندن هم timeframe و هم data
+            return timeframe_data, df_1h
             
         except Exception as e:
             self.logger.error(f"Error in select_optimal_timeframe: {e}")
-            return ("hour", "1")  # fallback
+            return ("hour", "1"), None
 
     async def detect_breakout_signal(self, analysis_result, token_address):
         """New breakout detection using pre-analyzed data"""

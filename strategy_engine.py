@@ -151,14 +151,21 @@ class StrategyEngine:
             self.logger.error(f"Error in save_alert for {signal['symbol']}: {e}")
 
     # کد تابع has_recent_alert که در مرحله قبل اصلاح شد، در اینجا باید قرار گیرد
+    # در strategy_engine.py
     async def has_recent_alert(self, signal, cooldown_hours=None):
         """
-        Checks for recent alerts for similar price levels with tolerance.
-        Supports dynamic cooldown based on the signal's timeframe.
+        Checks for recent alerts. Supports dynamic cooldowns for different signal types.
         """
         from datetime import datetime, timedelta
 
-        if cooldown_hours is None:
+        # --- روتر Cooldown ---
+        signal_type = signal.get('signal_type', '')
+
+        if signal_type.startswith('GEM_'):
+            # Cooldown کوتاه‌تر برای سیگنال‌های سریع Gem
+            cooldown_hours = 0.5  # 30 دقیقه
+        elif cooldown_hours is None:
+            # Cooldown پویا بر اساس تایم‌فریم برای سیگنال‌های تحلیل تکنیکال
             try:
                 timeframe = signal['analysis_result']['metadata']['timeframe']
                 if timeframe == 'minute':
@@ -168,32 +175,101 @@ class StrategyEngine:
                 else:
                     cooldown_hours = 12
             except (KeyError, TypeError):
+                # مقدار پیش‌فرض در صورت بروز خطا
                 cooldown_hours = TradingConfig.COOLDOWN_HOURS
-        
+        # --- پایان روتر Cooldown ---
+    
         level_price = signal.get('level_broken', signal.get('support_level'))
-        if level_price is None: return False
-
-        if hasattr(level_price, 'item'): level_price = level_price.item()
-        level_price = float(level_price)
-
-        tolerance = 0.005
-        price_min = level_price * (1 - tolerance)
-        price_max = level_price * (1 + tolerance)
-
-        cooldown_time = (datetime.now() - timedelta(hours=cooldown_hours)).isoformat()
-        placeholder = "%s" if db_manager.is_postgres else "?"
-        query = f"""SELECT timestamp FROM alert_history 
-                    WHERE token_address = {placeholder} 
-                    AND level_price BETWEEN {placeholder} AND {placeholder} 
-                    AND timestamp > {placeholder}
-                    LIMIT 1"""
-        params = (signal['token_address'], price_min, price_max, cooldown_time)
+    
+        # برای سیگنال‌های Gem که level ندارند، از خود آدرس توکن برای Cooldown استفاده می‌کنیم
+        if signal_type.startswith('GEM_'):
+            placeholder = "%s" if db_manager.is_postgres else "?"
+            cooldown_time = (datetime.now() - timedelta(hours=cooldown_hours)).isoformat()
+            query = f"""SELECT timestamp FROM alert_history 
+                        WHERE token_address = {placeholder} AND signal_type = {placeholder} AND timestamp > {placeholder}
+                        LIMIT 1"""
+            params = (signal['token_address'], signal_type, cooldown_time)
+        else:
+            # منطق فعلی برای سیگنال‌های مبتنی بر سطح قیمت
+            if level_price is None: return False
+            if hasattr(level_price, 'item'): level_price = level_price.item()
+            level_price = float(level_price)
+            tolerance = 0.005
+            price_min = level_price * (1 - tolerance)
+            price_max = level_price * (1 + tolerance)
+            cooldown_time = (datetime.now() - timedelta(hours=cooldown_hours)).isoformat()
+            placeholder = "%s" if db_manager.is_postgres else "?"
+            query = f"""SELECT timestamp FROM alert_history 
+                        WHERE token_address = {placeholder} AND level_price BETWEEN {placeholder} AND {placeholder} AND timestamp > {placeholder}
+                        LIMIT 1"""
+            params = (signal['token_address'], price_min, price_max, cooldown_time)
 
         try:
             if db_manager.fetchone(query, params):
-                self.logger.info(f"🔵 [COOLDOWN] Range-based cooldown for {signal['symbol']} at level {level_price:.6f} for {cooldown_hours}h.")
+                self.logger.info(f"🔵 [COOLDOWN] Cooldown active for {signal['symbol']} ({signal_type}) for {cooldown_hours}h.")
                 return True
             return False
         except Exception as e:
             self.logger.error(f"❌ Error in has_recent_alert for {signal['symbol']}: {e}")
             return False
+ 
+    async def detect_gem_momentum_signal(self, df_5min, token_info):
+        """استراتژی اختصاصی برای شکار توکن‌های جدید (Gem Hunter)."""
+        
+        current_price = df_5min['close'].iloc[-1]
+        ath = df_5min['high'].max() # All-Time High در بازه دریافتی
+
+        # --- استراتژی ۱: الگوی خرید در اولین پولبک (First Dip Buy) ---
+        if len(df_5min) >= 24: # حداقل ۲ ساعت داده لازم است
+            dip_from_ath = (ath - current_price) / ath if ath > 0 else 0
+            
+            # آیا قیمت بین ۲۰ تا ۴۰ درصد از سقف خود فاصله گرفته؟
+            if 0.20 < dip_from_ath < 0.40:
+                last_6_candles = df_5min.iloc[-6:] # ۳۰ دقیقه اخیر
+                # آیا قیمت در ۳۰ دقیقه اخیر روند صعودی ضعیفی را شروع کرده؟
+                if last_6_candles['close'].iloc[-1] > last_6_candles['close'].iloc[0]:
+                    self.logger.info(f"💎 {token_info['symbol']}: Potential 'First Dip' opportunity detected.")
+                    return self._create_gem_signal('GEM_FIRST_DIP', token_info, current_price, {
+                        "Dip from ATH": f"{dip_from_ath:.1%}",
+                        "ATH": f"${ath:.6f}"
+                    }, df_5min)
+
+        # --- استراتژی ۲: الگوی شکست پس از تثبیت (Consolidation Breakout) ---
+        if len(df_5min) >= 12: # حداقل ۱ ساعت داده لازم است
+            last_12_candles = df_5min.iloc[-12:] # یک ساعت اخیر
+            high_1h = last_12_candles['high'].max()
+            low_1h = last_12_candles['low'].min()
+            range_pct = (high_1h - low_1h) / current_price if current_price > 0 else 0
+            
+            # آیا قیمت در یک ساعت گذشته در یک محدوده باریک (کمتر از ۲۰٪) تثبیت شده؟
+            if range_pct < 0.20:
+                # آیا قیمت در حال شکستن سقف این محدوده است؟
+                if current_price >= high_1h * 0.98:
+                    self.logger.info(f"💎 {token_info['symbol']}: Potential 'Consolidation Breakout' detected.")
+                    return self._create_gem_signal('GEM_BREAKOUT', token_info, current_price, {
+                        "Consolidation Range": f"{range_pct:.1%}"
+                    }, df_5min)
+        
+        return None
+
+    def _create_gem_signal(self, signal_type, token_info, price, details, df):
+        """یک فرمت استاندارد برای سیگنال‌های Gem ایجاد می‌کند."""
+        from datetime import datetime
+        
+        signal = {
+            'signal_type': signal_type,
+            'token_address': token_info['address'],
+            'pool_id': token_info['pool_id'],
+            'symbol': token_info['symbol'],
+            'current_price': price,
+            'details': ", ".join([f"{k}: {v}" for k, v in details.items()]),
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        # اضافه کردن analysis_result برای سازگاری با تابع ارسال هشدار
+        signal['analysis_result'] = {
+            'metadata': {'symbol': token_info['symbol'], 'timeframe': 'minute', 'aggregate': '5'},
+            'raw_data': {'dataframe': df, 'current_price': price},
+            'technical_levels': {'zones': {'supply': [], 'demand': []}, 'fibonacci': None}
+        }
+        return signal

@@ -24,57 +24,71 @@ class BackgroundScanner:
         # ------------------------------------
 
     async def send_signal_alert(self, signal):
-        # این تابع بدون تغییر باقی می‌ماند
-        try:
-            analysis_result = signal.get('analysis_result')
-            symbol = signal['symbol']
-            token_address = signal['token_address']
-            
-            self.logger.info(f"🎨 Creating chart for {symbol}...")
-            
-            chart_image = await self.strategy_engine.analysis_engine.create_chart(
-                analysis_result
-            )
+    """یک هشدار سیگنال را بر اساس نوع آن به تلگرام ارسال می‌کند."""
+    try:
+        signal_type = signal.get('signal_type', '')
+        symbol = signal['symbol']
+        token_address = signal['token_address']
+        analysis_result = signal.get('analysis_result')
         
+        # تعیین فرمت پیام بر اساس نوع سیگنال
+        if signal_type.startswith('GEM_'):
+            # فرمت پیام برای سیگنال‌های Gem
+            message = (
+                f"💎 *GEM HUNTER ALERT* 💎\n\n"
+                f"**Token:** *{symbol}*\n"
+                f"**Signal:** `{signal_type}`\n"
+                f"**Current Price:** `${signal['current_price']:.6f}`\n\n"
+                f"**Details:** {signal.get('details', 'N/A')}\n"
+                f"Time: `{signal['timestamp']}`"
+            )
+        else:
+            # فرمت پیام برای سیگنال‌های تحلیل تکنیکال
             message = (
                 f"🚀 *MAJOR ZONE BREAKOUT*\n\n"
-                f"**Token:** *{signal['symbol']}*\n"
-                f"**Signal:** `{signal['signal_type']}`\n"
+                f"**Token:** *{symbol}*\n"
+                f"**Signal:** `{signal_type}`\n"
                 f"**Zone Score:** `{signal.get('zone_score', 0):.1f}/10`\n"
                 f"**Final Score:** `{signal.get('final_score', 0):.1f}/10`\n"
                 f"**Current Price:** `${signal['current_price']:.6f}`\n"
                 f"**Level Broken:** `${signal.get('level_broken', signal.get('support_level', 'N/A')):.6f}`\n\n"
                 f"Time: `{signal['timestamp']}`"
             )
+        
+        self.logger.info(f"🎨 Creating chart for {symbol}...")
+        
+        chart_image = await self.strategy_engine.analysis_engine.create_chart(
+            analysis_result
+        )
+        
+        placeholder = "%s" if db_manager.is_postgres else "?"
+        query = f"SELECT last_message_id FROM watchlist_tokens WHERE address = {placeholder}"
+        result = db_manager.fetchone(query, (token_address,))
+        reply_to_message_id = result['last_message_id'] if result and result['last_message_id'] else None
 
-            placeholder = "%s" if db_manager.is_postgres else "?"
-            query = f"SELECT last_message_id FROM watchlist_tokens WHERE address = {placeholder}"
-            result = db_manager.fetchone(query, (token_address,))
-            reply_to_message_id = result['last_message_id'] if result and result['last_message_id'] else None
+        if chart_image:
+            sent_message = await self.bot.send_photo(
+                chat_id=self.chat_id,
+                photo=chart_image,
+                caption=message,
+                parse_mode='Markdown',
+                reply_to_message_id=reply_to_message_id
+            )
+            self.logger.info(f"📊 Chart + Alert for {symbol} sent.")
+        else:
+            sent_message = await self.bot.send_message(
+                chat_id=self.chat_id,
+                text=message,
+                parse_mode='Markdown',
+                reply_to_message_id=reply_to_message_id
+            )
+            self.logger.info(f"📱 Text alert for {symbol} sent.")
 
-            if chart_image:
-                sent_message = await self.bot.send_photo(
-                    chat_id=self.chat_id,
-                    photo=chart_image,
-                    caption=message,
-                    parse_mode='Markdown',
-                    reply_to_message_id=reply_to_message_id
-                )
-                self.logger.info(f"📊 Chart + Alert for {symbol} sent.")
-            else:
-                sent_message = await self.bot.send_message(
-                    chat_id=self.chat_id,
-                    text=message,
-                    parse_mode='Markdown',
-                    reply_to_message_id=reply_to_message_id
-                )
-                self.logger.info(f"📱 Text alert for {symbol} sent.")
+        update_query = f"UPDATE watchlist_tokens SET last_message_id = {placeholder} WHERE address = {placeholder}"
+        db_manager.execute(update_query, (sent_message.message_id, token_address))
 
-            update_query = f"UPDATE watchlist_tokens SET last_message_id = {placeholder} WHERE address = {placeholder}"
-            db_manager.execute(update_query, (sent_message.message_id, token_address))
-            
-        except Exception as e:
-            self.logger.error(f"❌ Error sending Telegram alert for {symbol}: {e}")
+    except Exception as e:
+        self.logger.error(f"❌ Error sending Telegram alert: {e}")
 
 
     async def scan_tokens(self):
@@ -100,44 +114,50 @@ class BackgroundScanner:
 
       signals_found = 0
       for token in unique_tokens:
-          try:
-              df_test = await self.strategy_engine.analysis_engine.get_historical_data(token['pool_id'], "hour", "1", 50)
-              is_new_token = df_test.empty or len(df_test) < 48
+    signal = None
+    try:
+        # --- روتر استراتژی ---
+        # ابتدا دیتافریم ساعتی را برای تخمین سن توکن دریافت می‌کنیم
+        df_hourly = await self.strategy_engine.analysis_engine.get_historical_data(
+            token['pool_id'], "hour", "1", limit=100
+        )
+        hours_since_launch = len(df_hourly) if df_hourly is not None and not df_hourly.empty else 0
 
-              if is_new_token:
-                  timeframe, aggregate = "minute", "15"
-              else:
-                  timeframe, aggregate = "hour", "1"
+        # مسیر ۱: شکارچی الماس برای توکن‌های کمتر از ۲۴ ساعت
+        if 0 < hours_since_launch < 24:
+            self.logger.info(f"💎 [GEM HUNTER] Routing {token['symbol']} (Age: {hours_since_launch}h)")
+            df_5min = await self.strategy_engine.analysis_engine.get_historical_data(
+                token['pool_id'], "minute", "5", limit=300 # حدود ۲۴ ساعت داده ۵ دقیقه‌ای
+            )
+            if df_5min is not None and not df_5min.empty and len(df_5min) >= 12: # حداقل ۱ ساعت داده
+                signal = await self.strategy_engine.detect_gem_momentum_signal(df_5min, token)
+            else:
+                self.logger.info(f"⏳ {token['symbol']} is too new, waiting for more 5m data...")
 
-              analysis_result = await self.strategy_engine.analysis_engine.perform_full_analysis(
-                  token['pool_id'],
-                  timeframe=timeframe,
-                  aggregate=aggregate,
-                  symbol=token['symbol']
-              )
+        # مسیر ۲: تحلیل تکنیکال برای توکن‌های بالغ
+        elif hours_since_launch >= 24:
+            self.logger.info(f"📈 [TECHNICAL] Routing {token['symbol']} (Age: {hours_since_launch}h)")
+            analysis_result = await self.strategy_engine.analysis_engine.perform_full_analysis(
+                token['pool_id'], "hour", "1", token['symbol']
+            )
+            if analysis_result:
+                signal = await self.strategy_engine.detect_breakout_signal(analysis_result, token['address'])
+        
+        # --- پردازش سیگنال (مشترک برای هر دو مسیر) ---
+        if signal:
+            is_recent = await self.strategy_engine.has_recent_alert(signal)
 
-              if not analysis_result:
-                  continue
+            if not is_recent:
+                signals_found += 1
+                await self.strategy_engine.save_alert(signal)
+                await self.send_signal_alert(signal)
+                self.logger.info(f"✅ Signal for {signal['symbol']} processed and sent.")
+            else:
+                self.logger.info(f"🔵 Cooldown active for {signal['symbol']}. Signal skipped.")
 
-              signal = await self.strategy_engine.detect_breakout_signal(
-                  analysis_result,
-                  token['address']
-              )
-
-              if signal:
-                  is_recent = await self.strategy_engine.has_recent_alert(signal)
-    
-                  if not is_recent:
-                      signals_found += 1
-                      await self.strategy_engine.save_alert(signal)
-                      await self.send_signal_alert(signal)
-                      self.logger.info(f"✅ Signal for {signal['symbol']} processed and sent.")
-                  else:
-                      self.logger.info(f"🔵 Cooldown active for {signal['symbol']}. Signal skipped.")
-
-          except Exception as e:
-              self.last_error = str(e)
-              self.logger.error(f"❌ Error scanning {token.get('symbol', 'Unknown')}: {e}", exc_info=True)
+    except Exception as e:
+        self.last_error = str(e)
+        self.logger.error(f"❌ Error scanning {token.get('symbol', 'Unknown')}: {e}", exc_info=True)
 
       self.logger.info(f"📊 Scan #{self.scan_count} complete. {signals_found} new signals found.")
 

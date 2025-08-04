@@ -12,6 +12,31 @@ class StrategyEngine:
         self.analysis_engine = AnalysisEngine()
         # استفاده از لاگر به جای پرینت
         self.logger = logging.getLogger(__name__)
+ 
+    async def select_optimal_timeframe(self, pool_id):
+        """
+        انتخاب تایم‌فریم بهینه بر اساس عمر توکن
+        """
+        try:
+            # بررسی عمر توکن با تایم‌فریم 1 ساعته
+            df_1h = await self.analysis_engine.get_historical_data(
+                pool_id, "hour", "1", limit=100
+            )
+            hours_available = len(df_1h) if df_1h is not None and not df_1h.empty else 0
+        
+            if hours_available == 0:
+                return None  # داده کافی وجود ندارد
+            
+            if hours_available < 24:  # کمتر از یک روز
+                return ("minute", "5")
+            elif hours_available < 72:  # کمتر از 3 روز
+                return ("minute", "15")
+            else:  # بیشتر از 3 روز
+                return ("hour", "4")
+            
+        except Exception as e:
+            self.logger.error(f"Error in select_optimal_timeframe: {e}")
+            return ("hour", "1")  # fallback
 
     async def detect_breakout_signal(self, analysis_result, token_address):
         """New breakout detection using pre-analyzed data"""
@@ -160,7 +185,7 @@ class StrategyEngine:
 
         # --- روتر Cooldown ---
         signal_type = signal.get('signal_type', '')
-
+       
         if signal_type.startswith('GEM_'):
             # Cooldown کوتاه‌تر برای سیگنال‌های سریع Gem
             cooldown_hours = 0.5  # 30 دقیقه
@@ -171,12 +196,13 @@ class StrategyEngine:
                 if timeframe == 'minute':
                     cooldown_hours = 1
                 elif timeframe == 'hour':
-                    cooldown_hours = 4
-                else:
-                    cooldown_hours = 12
+                    cooldown_hours = TradingConfig.COOLDOWN_HOURS
+                else:  # ← این خط مفقود بود!
+                    cooldown_hours = TradingConfig.COOLDOWN_HOURS
             except (KeyError, TypeError):
                 # مقدار پیش‌فرض در صورت بروز خطا
                 cooldown_hours = TradingConfig.COOLDOWN_HOURS
+
         # --- پایان روتر Cooldown ---
     
         level_price = signal.get('level_broken', signal.get('support_level'))

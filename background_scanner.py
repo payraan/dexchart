@@ -113,10 +113,19 @@ class BackgroundScanner:
                         self.logger.info(f"⏳ {token['symbol']} is too new, waiting for more 5m data...")
                 
                 elif hours_since_launch >= 24:
-                    self.logger.info(f"📈 [TECHNICAL] Routing {token['symbol']} (Age: {hours_since_launch}h)")
-                    analysis_result = await self.strategy_engine.analysis_engine.perform_full_analysis(
-                        token['pool_id'], "hour", "1", token['symbol']
-                    )
+                    # استفاده از Smart Timeframe Router
+                    optimal_timeframe = await self.strategy_engine.select_optimal_timeframe(token['pool_id'])
+    
+                    if optimal_timeframe:
+                        timeframe, aggregate = optimal_timeframe
+                        self.logger.info(f"📈 [SMART] Routing {token['symbol']} (Age: {hours_since_launch}h) → {aggregate}{timeframe[0].upper()}")
+        
+                        analysis_result = await self.strategy_engine.analysis_engine.perform_full_analysis(
+                            token['pool_id'], timeframe, aggregate, token['symbol']
+                        )
+                    else:
+                        analysis_result = None
+
                     if analysis_result:
                         signal = await self.strategy_engine.detect_breakout_signal(analysis_result, token['address'])
                 
@@ -134,6 +143,8 @@ class BackgroundScanner:
                 self.last_error = str(e)
                 self.logger.error(f"❌ Error scanning {token.get('symbol', 'Unknown')}: {e}", exc_info=True)
 
+            await asyncio.sleep(2.5)  # 2.5 second delay
+        
         self.logger.info(f"📊 Scan #{self.scan_count} complete. {signals_found} new signals found.")
 
     async def start_scanning(self):

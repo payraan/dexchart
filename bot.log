@@ -1152,3 +1152,6 @@ sqlite3.OperationalError: no such column: last_message_id
 2025-08-04 23:04:49,147 - background_scanner - INFO - ✅ Signal for SOLBOX (support_test) processed and sent.
 2025-08-04 23:04:51,648 - background_scanner - INFO - 📊 Scan #1 complete. 5 new signals found.
 2025-08-04 23:04:51,652 - background_scanner - INFO - ⏳ Waiting 120 seconds for the next scan...
+2025-08-04 23:17:06,782 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8261343183:AAE6RQHdSU54Xc86EfYFDoUtObkmT1RBBXM/setWebhook "HTTP/1.1 200 OK"
+2025-08-04 23:17:06,845 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8261343183:AAE6RQHdSU54Xc86EfYFDoUtObkmT1RBBXM/getMe "HTTP/1.1 200 OK"
+2025-08-04 23:17:06,901 - background_scanner - INFO - 🚀 Background scanner started (Interval: 120s).

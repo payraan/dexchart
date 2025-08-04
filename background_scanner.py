@@ -24,71 +24,75 @@ class BackgroundScanner:
         # ------------------------------------
 
     async def send_signal_alert(self, signal):
-    """یک هشدار سیگنال را بر اساس نوع آن به تلگرام ارسال می‌کند."""
-    try:
-        signal_type = signal.get('signal_type', '')
-        symbol = signal['symbol']
-        token_address = signal['token_address']
-        analysis_result = signal.get('analysis_result')
-        
-        # تعیین فرمت پیام بر اساس نوع سیگنال
-        if signal_type.startswith('GEM_'):
-            # فرمت پیام برای سیگنال‌های Gem
-            message = (
-                f"💎 *GEM HUNTER ALERT* 💎\n\n"
-                f"**Token:** *{symbol}*\n"
-                f"**Signal:** `{signal_type}`\n"
-                f"**Current Price:** `${signal['current_price']:.6f}`\n\n"
-                f"**Details:** {signal.get('details', 'N/A')}\n"
-                f"Time: `{signal['timestamp']}`"
-            )
-        else:
-            # فرمت پیام برای سیگنال‌های تحلیل تکنیکال
-            message = (
-                f"🚀 *MAJOR ZONE BREAKOUT*\n\n"
-                f"**Token:** *{symbol}*\n"
-                f"**Signal:** `{signal_type}`\n"
-                f"**Zone Score:** `{signal.get('zone_score', 0):.1f}/10`\n"
-                f"**Final Score:** `{signal.get('final_score', 0):.1f}/10`\n"
-                f"**Current Price:** `${signal['current_price']:.6f}`\n"
-                f"**Level Broken:** `${signal.get('level_broken', signal.get('support_level', 'N/A')):.6f}`\n\n"
-                f"Time: `{signal['timestamp']}`"
-            )
-        
-        self.logger.info(f"🎨 Creating chart for {symbol}...")
-        
-        chart_image = await self.strategy_engine.analysis_engine.create_chart(
-            analysis_result
-        )
-        
-        placeholder = "%s" if db_manager.is_postgres else "?"
-        query = f"SELECT last_message_id FROM watchlist_tokens WHERE address = {placeholder}"
-        result = db_manager.fetchone(query, (token_address,))
-        reply_to_message_id = result['last_message_id'] if result and result['last_message_id'] else None
+        """یک هشدار سیگنال را بر اساس نوع آن به تلگرام ارسال می‌کند."""
+        try:
+            # --- روتر پیام بر اساس نوع سیگنال ---
+            signal_type = signal.get('signal_type', '')
+            symbol = signal['symbol']
+            token_address = signal['token_address']
+            analysis_result = signal.get('analysis_result')
 
-        if chart_image:
-            sent_message = await self.bot.send_photo(
-                chat_id=self.chat_id,
-                photo=chart_image,
-                caption=message,
-                parse_mode='Markdown',
-                reply_to_message_id=reply_to_message_id
-            )
-            self.logger.info(f"📊 Chart + Alert for {symbol} sent.")
-        else:
-            sent_message = await self.bot.send_message(
-                chat_id=self.chat_id,
-                text=message,
-                parse_mode='Markdown',
-                reply_to_message_id=reply_to_message_id
-            )
-            self.logger.info(f"📱 Text alert for {symbol} sent.")
+            if signal_type.startswith('GEM_'):
+                # فرمت پیام برای سیگنال‌های Gem Hunter
+                message = (
+                    f"💎 *GEM HUNTER ALERT* 💎\n\n"
+                    f"**Token:** *{symbol}*\n"
+                    f"**Signal:** `{signal_type}`\n"
+                    f"**Price:** `${signal.get('current_price', 0):.8f}`\n\n"
+                    f"**Details:** `{signal.get('details', 'N/A')}`\n"
+                    f"Time: `{signal.get('timestamp', '')}`"
+                )
+            else:
+                # فرمت پیام برای سیگنال‌های تحلیل تکنیکال
+                message = (
+                    f"🚀 *MAJOR ZONE BREAKOUT*\n\n"
+                    f"**Token:** *{symbol}*\n"
+                    f"**Signal:** `{signal_type}`\n"
+                    f"**Zone Score:** `{signal.get('zone_score', 0):.1f}/10`\n"
+                    f"**Final Score:** `{signal.get('final_score', 0):.1f}/10`\n"
+                    f"**Price:** `${signal.get('current_price', 0):.6f}`\n"
+                    f"**Level:** `${signal.get('level_broken', signal.get('support_level', 'N/A')):.6f}`\n\n"
+                    f"Time: `{signal.get('timestamp', '')}`"
+                )
+            # --- پایان روتر پیام ---
 
-        update_query = f"UPDATE watchlist_tokens SET last_message_id = {placeholder} WHERE address = {placeholder}"
-        db_manager.execute(update_query, (sent_message.message_id, token_address))
+            # ساخت نمودار (مشترک برای هر دو نوع سیگنال)
+            chart_image = None
+            if analysis_result:
+                self.logger.info(f"🎨 Creating chart for {symbol}...")
+                chart_image = await self.strategy_engine.analysis_engine.create_chart(analysis_result)
+        
+            # پیدا کردن پیام برای Reply (مشترک)
+            placeholder = "%s" if db_manager.is_postgres else "?"
+            query = f"SELECT last_message_id FROM watchlist_tokens WHERE address = {placeholder}"
+            result = db_manager.fetchone(query, (token_address,))
+            reply_to_message_id = result.get('last_message_id') if result and result.get('last_message_id') else None
 
-    except Exception as e:
-        self.logger.error(f"❌ Error sending Telegram alert: {e}")
+            # ارسال پیام به تلگرام (مشترک)
+            if chart_image:
+                sent_message = await self.bot.send_photo(
+                    chat_id=self.chat_id,
+                    photo=chart_image,
+                    caption=message,
+                    parse_mode='Markdown',
+                    reply_to_message_id=reply_to_message_id
+                )
+                self.logger.info(f"📊 Chart + Alert for {symbol} sent.")
+            else:
+                sent_message = await self.bot.send_message(
+                    chat_id=self.chat_id,
+                    text=message,
+                    parse_mode='Markdown',
+                    reply_to_message_id=reply_to_message_id
+                )
+                self.logger.info(f"📱 Text alert for {symbol} sent.")
+
+            # به‌روزرسانی دیتابیس (مشترک)
+            update_query = f"UPDATE watchlist_tokens SET last_message_id = {placeholder} WHERE address = {placeholder}"
+            db_manager.execute(update_query, (sent_message.message_id, token_address))
+        
+        except Exception as e:
+            self.logger.error(f"❌ Error sending Telegram alert for {signal.get('symbol', 'N/A')}: {e}", exc_info=True)
 
 
     async def scan_tokens(self):

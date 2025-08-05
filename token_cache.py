@@ -53,17 +53,6 @@ class TokenCache:
             )
         ''')
 
-        # 4. جدول تاریخچه هشدارها
-        db_manager.execute(f'''
-            CREATE TABLE IF NOT EXISTS alert_history (
-                id {primary_key_type},
-                token_address TEXT,
-                alert_type TEXT,
-                timestamp TEXT,
-                price_at_alert REAL
-            )
-        ''')
-
         # 5. جدول لیست پیگیری (Watchlist)
         db_manager.execute('''
             CREATE TABLE IF NOT EXISTS watchlist_tokens (
@@ -280,22 +269,4 @@ class TokenCache:
             })
     
         return tokens
-
-    async def start_background_update(self, interval_minutes=10):
-        """Start background task to update trending tokens every X minutes"""
-        print(f"Starting background token updates every {interval_minutes} minutes...")
-        
-        while True:
-            try:
-                print("Fetching trending tokens...")
-                tokens = await self.fetch_trending_tokens()
-                if tokens:
-                    print(f"Successfully updated {len(tokens)} trending tokens")
-                else:
-                    print("No tokens fetched this time")
-            except Exception as e:
-                print(f"Background update error: {e}")
-            
-            # Wait for next update
-            await asyncio.sleep(interval_minutes * 60)
 

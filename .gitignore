@@ -25,3 +25,13 @@ env/
 .DS_Store
 Thumbs.db
 bot.log
+
+# Log files
+*.log
+
+# Cache and temporary files
+.pytest_cache/
+*.backup*
+
+# Scripts (optional)
+scripts/migrate_db.py

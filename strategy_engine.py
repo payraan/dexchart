@@ -170,7 +170,7 @@ class StrategyEngine:
             current_price, level_price
         )
         placeholder = "%s" if db_manager.is_postgres else "?"
-        query = f'''INSERT INTO alert_history (token_address, alert_type, timestamp, price_at_alert, level_price)
+        query = f'''INSERT INTO alert_history (token_address, signal_type, timestamp, price_at_alert, level_price)
                     VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})'''
         try:
             db_manager.execute(query, params)

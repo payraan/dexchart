@@ -195,43 +195,58 @@ class AnalysisEngine:
         return atr
 
     def find_origin_zone(self, df):
-        """شناسایی Origin Zone - محل تولد قیمت و شروع حرکت اصلی"""
-        if len(df) < ORIGIN_CONSOLIDATION_MIN:
-            return None
-            
-        # پیدا کردن پایین‌ترین قیمت
-        lowest_idx = df['low'].idxmin()
-        lowest_price = df['low'].iloc[lowest_idx]
-        
-        # بررسی محدوده تجمع اولیه (20 کندل اول)
-        consolidation_end = min(lowest_idx + ORIGIN_CONSOLIDATION_MIN, len(df) - 1)
-        consolidation_range = df.iloc[lowest_idx:consolidation_end]
-        
-        if len(consolidation_range) < 10:
-            return None
-            
-        # محاسبه نوسان در محدوده
-        range_high = consolidation_range['high'].max()
-        range_low = consolidation_range['low'].min()
-        range_percent = (range_high - range_low) / range_low if range_low > 0 else 0
-        
-        # بررسی پامپ بعدی
-        if consolidation_end < len(df) - 1:
-            post_pump_data = df.iloc[consolidation_end:]
-            max_price_after = post_pump_data['high'].max()
-            pump_percent = (max_price_after - range_high) / range_high if range_high > 0 else 0
-            
-            # اگر شرایط Origin تأیید شد
-            if range_percent <= ORIGIN_RANGE_MAX and pump_percent >= ORIGIN_PUMP_MIN:
-                return {
-                    'zone_type': 'origin',
-                    'zone_bottom': range_low,
-                    'zone_top': range_high,
-                    'consolidation_candles': len(consolidation_range),
-                    'pump_percent': pump_percent
-                }
-        
-        return None
+       """شناسایی Origin Zone - محل تولد قیمت و شروع حرکت اصلی"""
+       
+       # بررسی عمر توکن - Origin Zone فقط برای توکن‌های جدید
+       if 'timestamp' in df.columns and len(df) > 0:
+           first_ts = df['timestamp'].iloc[0]
+           last_ts = df['timestamp'].iloc[-1]
+           age_days = (last_ts - first_ts) / 86400
+           
+           # اگر بیش از 30 روز عمر داره، Origin Zone نداره
+           if age_days > 30:
+               return None
+       
+       # یا بررسی ساده بر اساس تعداد کندل
+       if len(df) > 500:  # اگر بیش از 500 کندل داره = توکن قدیمی
+           return None
+           
+       if len(df) < ORIGIN_CONSOLIDATION_MIN:
+           return None
+
+       # پیدا کردن پایین‌ترین قیمت
+       lowest_idx = df['low'].idxmin()
+       lowest_price = df['low'].iloc[lowest_idx]
+
+       # بررسی محدوده تجمع اولیه (20 کندل اول)
+       consolidation_end = min(lowest_idx + ORIGIN_CONSOLIDATION_MIN, len(df) - 1)
+       consolidation_range = df.iloc[lowest_idx:consolidation_end]
+
+       if len(consolidation_range) < 10:
+           return None
+
+       # محاسبه نوسان در محدوده
+       range_high = consolidation_range['high'].max()
+       range_low = consolidation_range['low'].min()
+       range_percent = (range_high - range_low) / range_low if range_low > 0 else 0
+
+       # بررسی پامپ بعدی
+       if consolidation_end < len(df) - 1:
+           post_pump_data = df.iloc[consolidation_end:]
+           max_price_after = post_pump_data['high'].max()
+           pump_percent = (max_price_after - range_high) / range_high if range_high > 0 else 0
+
+           # اگر شرایط Origin تأیید شد
+           if range_percent <= ORIGIN_RANGE_MAX and pump_percent >= ORIGIN_PUMP_MIN:
+               return {
+                   'zone_type': 'origin',
+                   'zone_bottom': range_low,
+                   'zone_top': range_high,
+                   'consolidation_candles': len(consolidation_range),
+                   'pump_percent': pump_percent
+               }
+
+       return None
 
     def find_market_structure_zones(self, df):
         """شناسایی Major Zones با سیستم امتیازدهی پیشرفته"""
@@ -611,18 +626,22 @@ class AnalysisEngine:
             ax.add_patch(rect)
        
         ax.grid(True, alpha=0.3, color='#333333')
+        # انتقال محور Y به سمت راست
+        ax.yaxis.tick_right()
+        ax.yaxis.set_label_position('right')
         timeframe_label = f"{aggregate}{timeframe[0].upper()}" if aggregate != "1" else timeframe.title()
         ax.set_title(f'{symbol} - {timeframe_label} Chart', color='white', fontsize=14)
-        ax.text(0.98, 0.95, 'NarmoonAI',
-               transform=ax.transAxes, color='#999999', fontsize=16,
-               alpha=0.8, ha='right', va='top',
+        # Watermark در پایین سمت راست
+        ax.text(0.98, 0.05, 'NarmoonAI',
+               transform=ax.transAxes, color='#999999', fontsize=18,
+               alpha=0.7, ha='right', va='top',
                style='italic', weight='light')
                     
         latest_price = analysis_result['raw_data']['current_price']
         if latest_price > 0:  
-           ax.text(0.02, 0.98, f'Price: ${latest_price:.6f}',
+           ax.text(0.98, 0.08, f'Price: ${latest_price:.6f}',
                   transform=ax.transAxes, color='white', fontsize=12,
-                  verticalalignment='top',
+                  verticalalignment='bottom', horizontalalignment='right',
                   bbox=dict(boxstyle='round', facecolor='black', alpha=0.7))
        
         ax.set_xlim(timestamps[0], chart_end_time)

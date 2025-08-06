@@ -79,67 +79,77 @@ class BackgroundScanner:
             self.logger.error(f"❌ Error sending Telegram alert for {signal.get('symbol', 'N/A')}: {e}", exc_info=True)
 
     async def scan_tokens(self):
-        """اسکن هوشمند توکن‌ها با استفاده از روتر برای انتخاب استراتژی مناسب."""
-        self.last_scan_time = datetime.now().isoformat()
-        self.scan_count += 1
-        self.logger.info(f"🔍 [SCAN #{self.scan_count}] Starting scan...")
-        
-        trending_tokens = self.token_cache.get_trending_tokens(limit=50)
-        watchlist_tokens = self.token_cache.get_watchlist_tokens(limit=150)
-        tokens = trending_tokens + watchlist_tokens
-            
-        seen_addresses = set()
-        unique_tokens = [t for t in tokens if t['address'] not in seen_addresses and not seen_addresses.add(t['address'])]
-                
-        self.logger.info(f"📊 Scanning {len(unique_tokens)} unique tokens...")
-        signals_found = 0
-                
-        for token in unique_tokens:
-            signal = None
-            try:
-                timeframe_result = await self.strategy_engine.select_optimal_timeframe(token['pool_id'])
-                
-                if timeframe_result[0]:
-                    timeframe_data, cached_df = timeframe_result
-                    timeframe, aggregate = timeframe_data
-                    hours_available = len(cached_df) if cached_df is not None else 0
-                
-                    if hours_available < 24:
-                        days_available = hours_available / 24
-                        self.logger.info(f"💎 [GEM HUNTER] Routing {token['symbol']} (Age: {days_available:.1f} days)")
-                        df_5min = await self.strategy_engine.analysis_engine.get_historical_data(
-                            token['pool_id'], "minute", "5", limit=300
-                        )
-                        if df_5min is not None and not df_5min.empty and len(df_5min) >= 12:
-                            signal = await self.strategy_engine.detect_gem_momentum_signal(df_5min, token)
-                        else:
-                            self.logger.info(f"⏳ {token['symbol']} is too new, waiting for more 5m data...")
-                    else:
-                        days_available = hours_available / 24
-                        self.logger.info(f"📈 [SMART] Routing {token['symbol']} (Age: {days_available:.1f} days) → {aggregate}{timeframe[0].upper()}")
-                        analysis_result = await self.strategy_engine.analysis_engine.perform_full_analysis(
-                            token['pool_id'], timeframe, aggregate, token['symbol']
-                        )
-                        if analysis_result:
-                            signal = await self.strategy_engine.detect_breakout_signal(analysis_result, token['address'])
-                    
-                if signal:
-                    is_recent = await self.strategy_engine.has_recent_alert(signal)
-                    if not is_recent:
-                        signals_found += 1
-                        await self.strategy_engine.save_alert(signal)
-                        await self.send_signal_alert(signal)
-                        self.logger.info(f"✅ Signal for {signal['symbol']} ({signal.get('signal_type')}) processed and sent.")
-                    else:
-                        self.logger.info(f"🔵 Cooldown active for {signal['symbol']}. Signal skipped.")
+       """اسکن هوشمند توکن‌ها با استفاده از روتر برای انتخاب استراتژی مناسب."""
+       self.last_scan_time = datetime.now().isoformat()
+       self.scan_count += 1
+       self.logger.info(f"🔍 [SCAN #{self.scan_count}] Starting scan...")
+           
+       trending_tokens = self.token_cache.get_trending_tokens(limit=50)
+       watchlist_tokens = self.token_cache.get_watchlist_tokens(limit=150)
+       tokens = trending_tokens + watchlist_tokens
+               
+       seen_addresses = set()
+       unique_tokens = [t for t in tokens if t['address'] not in seen_addresses and not seen_addresses.add(t['address'])]
+                   
+       self.logger.info(f"📊 Scanning {len(unique_tokens)} unique tokens...")
+       signals_found = 0
+                   
+       for token in unique_tokens:
+           signal = None
+           try:
+               timeframe_result = await self.strategy_engine.select_optimal_timeframe(token['pool_id'])
+                   
+               if timeframe_result[0]:
+                   timeframe_data, cached_df = timeframe_result
+                   timeframe, aggregate = timeframe_data
+                   
+                   # محاسبه عمر واقعی از روی timestamp ها
+                   if cached_df is not None and not cached_df.empty and 'timestamp' in cached_df.columns:
+                       first_ts = cached_df['timestamp'].iloc[0]
+                       last_ts = cached_df['timestamp'].iloc[-1]
+                       age_hours = (last_ts - first_ts) / 3600
+                       age_days = age_hours / 24
+                   else:
+                       # fallback به تعداد رکوردها
+                       age_hours = len(cached_df) if cached_df is not None else 0
+                       age_days = age_hours / 24
+                   
+                   # تصمیم‌گیری بر اساس عمر واقعی
+                   if age_days < 1:  # توکن‌های زیر 1 روز
+                       self.logger.info(f"💎 [GEM HUNTER] Routing {token['symbol']} (Age: {age_days:.2f} days / {age_hours:.1f} hours)")
+                       df_5min = await self.strategy_engine.analysis_engine.get_historical_data(
+                           token['pool_id'], "minute", "5", limit=300
+                       )
+                       if df_5min is not None and not df_5min.empty and len(df_5min) >= 12:
+                           signal = await self.strategy_engine.detect_gem_momentum_signal(df_5min, token)
+                       else:
+                           self.logger.info(f"⏳ {token['symbol']} is too new, waiting for more 5m data...")
+                   else:
+                       # توکن‌های بالای 1 روز - timeframe از select_optimal_timeframe میاد
+                       self.logger.info(f"📈 [SMART] Routing {token['symbol']} (Age: {age_days:.1f} days) → {aggregate}{timeframe[0].upper()}")
+                       analysis_result = await self.strategy_engine.analysis_engine.perform_full_analysis(
+                           token['pool_id'], timeframe, aggregate, token['symbol']
+                       )
+                       if analysis_result:
+                           signal = await self.strategy_engine.detect_breakout_signal(analysis_result, token['address'])
+               
+               if signal:
+                   is_recent = await self.strategy_engine.has_recent_alert(signal)
+                   if not is_recent:
+                       signals_found += 1
+                       await self.strategy_engine.save_alert(signal)
+                       await self.send_signal_alert(signal)
+                       self.logger.info(f"✅ Signal for {signal['symbol']} ({signal.get('signal_type')}) processed and sent.")
+                   else:
+                       self.logger.info(f"🔵 Cooldown active for {signal['symbol']}. Signal skipped.")
 
-            except Exception as e:
-                self.last_error = str(e)
-                self.logger.error(f"❌ Error scanning {token.get('symbol', 'Unknown')}: {e}", exc_info=True)
-
-            await asyncio.sleep(2.5)  # delay
-            
-        self.logger.info(f"📊 Scan #{self.scan_count} complete. {signals_found} new signals found.")
+           except Exception as e:
+               self.last_error = str(e)
+               self.logger.error(f"❌ Error scanning {token.get('symbol', 'Unknown')}: {e}", exc_info=True)
+   
+           await asyncio.sleep(2.5)  # delay
+       
+       self.logger.info(f"📊 Scan #{self.scan_count} complete. {signals_found} new signals found.")
 
     async def start_scanning(self):
         """اسکن مداوم پس‌زمینه را آغاز می‌کند."""

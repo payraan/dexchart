@@ -15,43 +15,56 @@ class StrategyEngine:
  
     async def select_optimal_timeframe(self, pool_id):
         """
-        انتخاب تایم‌فریم بهینه بر اساس عمر توکن
+        انتخاب تایم‌فریم بهینه بر اساس عمر واقعی توکن
         """
         try:
-            # یک بار API call برای بررسی عمر
+            # اول سعی می‌کنیم با داده 1 ساعته عمر رو تخمین بزنیم
             df_1h = await self.analysis_engine.get_historical_data(
                 pool_id, "hour", "1", limit=500
             )
-            hours_available = len(df_1h) if df_1h is not None and not df_1h.empty else 0
             
-            if hours_available == 0:
+            if df_1h is None or df_1h.empty:
                 return None, None
             
-            # محاسبه عمر توکن بر حسب روز
-            days_available = hours_available / 24
-            
-            # انتخاب timeframe بر اساس عمر
-            if days_available < 1:  # کمتر از 1 روز
-                timeframe_data = ("minute", "5")
-                self.logger.info(f"📱 Token age: {days_available:.1f} days → Using 5M chart")
-            elif days_available < 3:  # 1-3 روز
-                timeframe_data = ("minute", "15")
-                self.logger.info(f"📱 Token age: {days_available:.1f} days → Using 15M chart")
-            elif days_available < 30:  # 3-30 روز
-                timeframe_data = ("hour", "1")
-                self.logger.info(f"📱 Token age: {days_available:.1f} days → Using 1H chart")
-            elif days_available < 90:  # 1-3 ماه
-                timeframe_data = ("hour", "4")
-                self.logger.info(f"📈 Token age: {days_available:.1f} days → Using 4H chart")
-            else:  # بیشتر از 3 ماه
-                timeframe_data = ("hour", "12")
-                self.logger.info(f"📊 Token age: {days_available:.1f} days → Using 12H chart")
+            # اگر 500 کندل 1 ساعته داریم = حداقل 20 روز عمر
+            if len(df_1h) >= 500:
+                # توکن قدیمی - چک کنیم چقدر قدیمیه
+                df_daily = await self.analysis_engine.get_historical_data(
+                    pool_id, "day", "1", limit=100
+                )
+                
+                if df_daily is not None and len(df_daily) >= 90:
+                    # بیش از 90 روز = 12H chart
+                    timeframe_data = ("hour", "12")
+                    self.logger.info(f"📉 Old token (90+ days) → Using 12H chart")
+                elif df_daily is not None and len(df_daily) >= 30:
+                    # 30-90 روز = 4H chart  
+                    timeframe_data = ("hour", "4")
+                    self.logger.info(f"📊 Medium age token (30-90 days) → Using 4H chart")
+                else:
+                    # 20-30 روز = 1H chart
+                    timeframe_data = ("hour", "1")
+                    self.logger.info(f"📈 Recent token (20-30 days) → Using 1H chart")
+            else:
+                # کمتر از 500 کندل 1 ساعته
+                hours_available = len(df_1h)
+                days_available = hours_available / 24
+                
+                if days_available < 1:  # کمتر از 1 روز
+                    timeframe_data = ("minute", "5")
+                    self.logger.info(f"🆕 Very new token ({hours_available}h) → Using 5M chart")
+                elif days_available < 3:  # 1-3 روز
+                    timeframe_data = ("minute", "15")
+                    self.logger.info(f"📱 New token ({days_available:.1f} days) → Using 15M chart")
+                else:  # 3-20 روز
+                    timeframe_data = ("hour", "1")
+                    self.logger.info(f"📈 Recent token ({days_available:.1f} days) → Using 1H chart")
             
             return timeframe_data, df_1h
             
         except Exception as e:
             self.logger.error(f"Error in select_optimal_timeframe: {e}")
-            return ("hour", "4"), None  # default to 4H
+            return ("hour", "4"), None
 
     async def detect_breakout_signal(self, analysis_result, token_address):
         """New breakout detection using pre-analyzed data"""

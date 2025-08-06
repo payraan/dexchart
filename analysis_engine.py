@@ -17,7 +17,7 @@ class AnalysisEngine:
         self.token_cache = TokenCache()
         # In-Memory Cache for analysis results
         self.analysis_cache = {}
-        self.cache_duration = 60  # 60 seconds cache validity
+        self.cache_duration = 300  # 5 minutes cache validity
 
     def _is_cache_valid(self, cache_key):
         """Check if cached analysis is still valid"""
@@ -35,7 +35,7 @@ class AnalysisEngine:
         """Main analysis function - Single Source of Truth"""
         from datetime import datetime
         
-        cache_key = f"{pool_id}_{timeframe}_{aggregate}_{int(time.time()/120)}"
+        cache_key = f"{pool_id}_{timeframe}_{aggregate}_{int(time.time()/300)}"  # هر 5 دقیقه
         
         # Check cache first
         if self._is_cache_valid(cache_key):

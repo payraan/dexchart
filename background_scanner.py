@@ -147,7 +147,7 @@ class BackgroundScanner:
                self.last_error = str(e)
                self.logger.error(f"❌ Error scanning {token.get('symbol', 'Unknown')}: {e}", exc_info=True)
    
-           await asyncio.sleep(2.5)  # delay
+           await asyncio.sleep(5.0)  # delay
        
        self.logger.info(f"📊 Scan #{self.scan_count} complete. {signals_found} new signals found.")
 

@@ -37,6 +37,6 @@ logging.basicConfig(
 class TradingConfig:
    ZONE_SCORE_MIN = float(os.getenv("ZONE_SCORE_MIN", "2.5"))
    PROXIMITY_THRESHOLD = float(os.getenv("PROXIMITY_THRESHOLD", "0.12"))
-   COOLDOWN_HOURS = float(os.getenv("COOLDOWN_HOURS", "0.5"))
+   COOLDOWN_HOURS = float(os.getenv("COOLDOWN_HOURS", "0.083"))
    FIBONACCI_TOLERANCE = float(os.getenv("FIBONACCI_TOLERANCE", "0.02"))
 

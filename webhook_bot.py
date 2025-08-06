@@ -49,7 +49,10 @@ async def lifespan(app: FastAPI):
         bot_token=BOT_TOKEN,
         chat_id=Config.CHAT_ID
     )
-    asyncio.create_task(scanner.start_scanning())
+    # ایجاد یک task pool برای جداسازی scanner از chart generation
+    scanner_task = asyncio.create_task(scanner.start_scanning())
+    app.state.scanner_task = scanner_task
+    print("🔍 Background scanner started as separate task")
     print("🔍 Background scanner started")
     
     yield

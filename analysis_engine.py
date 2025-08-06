@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import matplotlib.patches as patches
 import io
+import time
 from zone_config import *
 
 class AnalysisEngine:
@@ -34,7 +35,7 @@ class AnalysisEngine:
         """Main analysis function - Single Source of Truth"""
         from datetime import datetime
         
-        cache_key = f"{pool_id}_{timeframe}_{aggregate}"
+        cache_key = f"{pool_id}_{timeframe}_{aggregate}_{int(time.time()/120)}"
         
         # Check cache first
         if self._is_cache_valid(cache_key):
@@ -73,11 +74,25 @@ class AnalysisEngine:
     async def _do_full_analysis(self, pool_id, timeframe, aggregate, symbol):
         """Core analysis logic - computes all technical data"""
         from datetime import datetime
-        
+
         # Get historical data
+        print(f"🔄 DEBUG: Starting analysis - Pool: {pool_id}, TF: {timeframe}/{aggregate}")
+    
         df = await self.get_historical_data(pool_id, timeframe, aggregate, limit=500)
-        if df is None or df.empty or len(df) < 30:
+        print(f"🔍 DEBUG: Historical data shape: {df.shape if df is not None and not df.empty else 'Empty/None'}")
+    
+        if df is None or df.empty:
+            print(f"❌ DEBUG: No historical data for {timeframe}/{aggregate}")
             return None
+    
+        if len(df) < 30:
+            print(f"❌ DEBUG: Insufficient data - only {len(df)} candles")
+            return None
+
+    # ادامه کد...
+    # Calculate zones
+    origin_zone = self.find_origin_zone(df)
+    # ... بقیه کد
             
         # Calculate zones
         # شناسایی Origin Zone (برای توکن‌های جدید)

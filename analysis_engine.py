@@ -85,8 +85,16 @@ class AnalysisEngine:
             print(f"❌ DEBUG: No historical data for {timeframe}/{aggregate}")
             return None
         
-        if len(df) < 30:
-            print(f"❌ DEBUG: Insufficient data - only {len(df)} candles")
+        # Dynamic minimum بر اساس تایم‌فریم
+        if timeframe == 'minute':
+            min_candles = 30
+        elif timeframe == 'hour':
+            min_candles = 20  
+        else:  # day
+            min_candles = 7   # حداقل 1 هفته
+
+        if len(df) < min_candles:
+            print(f"❌ DEBUG: Insufficient data - only {len(df)} candles (need {min_candles} for {timeframe})")
             return None
             
         # Calculate zones

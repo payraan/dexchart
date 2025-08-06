@@ -130,27 +130,22 @@ class StrategyEngine:
         for zone in supply_zones:
             if zone.get('score', 0) < ZONE_SCORE_MIN:
                 continue
-            
-            zone_price = zone['level_price']  # تغییر از avg_price به level_price
+        
+            zone_price = zone['level_price']
             final_score = self._calculate_confluence_score(zone, zone_price, fibonacci_data)
 
-            if current_price < zone_price:
-                proximity = (zone_price - current_price) / current_price
-                if proximity < PROXIMITY_THRESHOLD:
-                    return self._create_signal_dict('resistance_proximity', locals(), final_score)
-            else:
+            # فقط بعد از شکست سیگنال بده
+            if current_price > zone_price:
                 proximity_above = (current_price - zone_price) / zone_price
-                if proximity_above < 0.05:
-                    return self._create_signal_dict('resistance_breakout_realtime', locals(), final_score)
-                elif proximity_above < PROXIMITY_THRESHOLD:
-                    return self._create_signal_dict('sr_flip_retest', locals(), final_score)
+                if proximity_above < 0.02:  # فقط تا 2% بعد از شکست
+                    return self._create_signal_dict('resistance_breakout', locals(), final_score)
 
         # بررسی حمایت‌ها (Demand Zones)
         for zone in demand_zones:
             if zone.get('score', 0) < ZONE_SCORE_MIN:
                 continue
 
-            zone_price = zone['level_price']  # تغییر از avg_price به level_price
+            zone_price = zone['level_price']
             proximity = abs(current_price - zone_price) / zone_price
 
             if proximity < PROXIMITY_THRESHOLD:
@@ -311,21 +306,6 @@ class StrategyEngine:
         current_price = df_5min['close'].iloc[-1]
         ath = df_5min['high'].max() # All-Time High در بازه دریافتی
         
-        # --- استراتژی ۱: الگوی خرید در اولین پولبک (First Dip Buy) ---
-        if len(df_5min) >= 24: # حداقل ۲ ساعت داده لازم است
-            dip_from_ath = (ath - current_price) / ath if ath > 0 else 0
-            
-            # آیا قیمت بین ۲۰ تا ۴۰ درصد از سقف خود فاصله گرفته؟
-            if 0.20 < dip_from_ath < 0.40:
-                last_6_candles = df_5min.iloc[-6:] # ۳۰ دقیقه اخیر
-                # آیا قیمت در ۳۰ دقیقه اخیر روند صعودی ضعیفی را شروع کرده؟
-                if last_6_candles['close'].iloc[-1] > last_6_candles['close'].iloc[0]:
-                    self.logger.info(f"💎 {token_info['symbol']}: Potential 'First Dip' opportunity detected.")
-                    return self._create_gem_signal('GEM_FIRST_DIP', token_info, current_price, {
-                        "Dip from ATH": f"{dip_from_ath:.1%}",
-                        "ATH": f"${ath:.6f}"
-                    }, df_5min)
-
         # --- استراتژی ۲: الگوی شکست پس از تثبیت (Consolidation Breakout) ---
         if len(df_5min) >= 12: # حداقل ۱ ساعت داده لازم است
             last_12_candles = df_5min.iloc[-12:] # یک ساعت اخیر

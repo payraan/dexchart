@@ -146,7 +146,12 @@ async def chart_button_callback(update: Update, context: ContextTypes.DEFAULT_TY
                     except:
                         symbol = "Unknown"
                     
-                    chart_image = await analysis_engine.create_chart(pool_id, symbol, timeframe, aggregate)
+                    # اول analysis کن
+                    analysis_result = await analysis_engine.perform_full_analysis(pool_id, timeframe, aggregate, symbol)
+                    if analysis_result:
+                        chart_image = await analysis_engine.create_chart(analysis_result)
+                    else:
+                        chart_image = None
                     if chart_image:
                         await query.message.reply_photo(
                             photo=chart_image,

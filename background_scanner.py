@@ -105,7 +105,8 @@ class BackgroundScanner:
                     hours_available = len(cached_df) if cached_df is not None else 0
                 
                     if hours_available < 24:
-                        self.logger.info(f"💎 [GEM HUNTER] Routing {token['symbol']} (Age: {hours_available}h)")
+                        days_available = hours_available / 24
+                        self.logger.info(f"💎 [GEM HUNTER] Routing {token['symbol']} (Age: {days_available:.1f} days)")
                         df_5min = await self.strategy_engine.analysis_engine.get_historical_data(
                             token['pool_id'], "minute", "5", limit=300
                         )
@@ -114,7 +115,8 @@ class BackgroundScanner:
                         else:
                             self.logger.info(f"⏳ {token['symbol']} is too new, waiting for more 5m data...")
                     else:
-                        self.logger.info(f"📈 [SMART] Routing {token['symbol']} (Age: {hours_available}h) → {aggregate}{timeframe[0].upper()}")
+                        days_available = hours_available / 24
+                        self.logger.info(f"📈 [SMART] Routing {token['symbol']} (Age: {days_available:.1f} days) → {aggregate}{timeframe[0].upper()}")
                         analysis_result = await self.strategy_engine.analysis_engine.perform_full_analysis(
                             token['pool_id'], timeframe, aggregate, token['symbol']
                         )

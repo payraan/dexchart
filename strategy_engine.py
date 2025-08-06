@@ -15,31 +15,43 @@ class StrategyEngine:
  
     async def select_optimal_timeframe(self, pool_id):
         """
-        انتخاب تایم‌فریم بهینه + برگرداندن data برای استفاده مجدد
+        انتخاب تایم‌فریم بهینه بر اساس عمر توکن
         """
         try:
-            # یک بار API call
+            # یک بار API call برای بررسی عمر
             df_1h = await self.analysis_engine.get_historical_data(
-                pool_id, "hour", "1", limit=100
+                pool_id, "hour", "1", limit=500
             )
             hours_available = len(df_1h) if df_1h is not None and not df_1h.empty else 0
-        
+            
             if hours_available == 0:
                 return None, None
             
-            if hours_available < 24:
-                timeframe_data = ("minute", "5")
-            elif hours_available < 72:
-                timeframe_data = ("minute", "15")
-            else:
-                timeframe_data = ("hour", "4")
+            # محاسبه عمر توکن بر حسب روز
+            days_available = hours_available / 24
             
-            # برگرداندن هم timeframe و هم data
+            # انتخاب timeframe بر اساس عمر
+            if days_available < 1:  # کمتر از 1 روز
+                timeframe_data = ("minute", "5")
+                self.logger.info(f"📱 Token age: {days_available:.1f} days → Using 5M chart")
+            elif days_available < 3:  # 1-3 روز
+                timeframe_data = ("minute", "15")
+                self.logger.info(f"📱 Token age: {days_available:.1f} days → Using 15M chart")
+            elif days_available < 30:  # 3-30 روز
+                timeframe_data = ("hour", "1")
+                self.logger.info(f"📱 Token age: {days_available:.1f} days → Using 1H chart")
+            elif days_available < 90:  # 1-3 ماه
+                timeframe_data = ("hour", "4")
+                self.logger.info(f"📈 Token age: {days_available:.1f} days → Using 4H chart")
+            else:  # بیشتر از 3 ماه
+                timeframe_data = ("hour", "12")
+                self.logger.info(f"📊 Token age: {days_available:.1f} days → Using 12H chart")
+            
             return timeframe_data, df_1h
             
         except Exception as e:
             self.logger.error(f"Error in select_optimal_timeframe: {e}")
-            return ("hour", "1"), None
+            return ("hour", "4"), None  # default to 4H
 
     async def detect_breakout_signal(self, analysis_result, token_address):
         """New breakout detection using pre-analyzed data"""
@@ -55,8 +67,31 @@ class StrategyEngine:
         current_price = analysis_result['raw_data']['current_price']
         supply_zones = analysis_result['technical_levels']['zones']['supply']
         demand_zones = analysis_result['technical_levels']['zones']['demand']
+        origin_zone = analysis_result['technical_levels']['zones'].get('origin')
         fibonacci_data = analysis_result['technical_levels']['fibonacci']
         
+        # بررسی Origin Zone برای توکن‌های جدید
+        if origin_zone and current_price > 0:
+            zone_bottom = origin_zone['zone_bottom']
+            zone_top = origin_zone['zone_top']
+            
+            # اگر قیمت به Origin Zone برگشته
+            if zone_bottom <= current_price <= zone_top * 1.1:
+                self.logger.info(f"💎 {symbol}: Testing Origin Zone at ${current_price:.6f}")
+                signal = {
+                    'signal_type': 'ORIGIN_RETEST',
+                    'token_address': token_address,
+                    'pool_id': pool_id,
+                    'symbol': symbol,
+                    'current_price': current_price,
+                    'zone_score': 10.0,  # Origin Zone همیشه امتیاز بالا
+                    'final_score': 10.0,
+                    'support_level': zone_bottom,
+                    'timestamp': datetime.now().isoformat()
+                }
+                signal['analysis_result'] = analysis_result
+                return signal
+
         signal = self._check_confluence_signals(
             current_price, supply_zones, demand_zones, fibonacci_data,
             token_address, pool_id, symbol
@@ -73,18 +108,17 @@ class StrategyEngine:
     def _check_confluence_signals(self, current_price, supply_zones, demand_zones,
                                 fibonacci_data, token_address, pool_id, symbol):
         """
-        Checks for multiple signal types using configuration from TradingConfig.
+        Checks for signals using new zone structure
         """
-        # --- استفاده از مقادیر TradingConfig ---
         ZONE_SCORE_MIN = TradingConfig.ZONE_SCORE_MIN
         PROXIMITY_THRESHOLD = TradingConfig.PROXIMITY_THRESHOLD
 
-        # --- تحلیل نواحی مقاومت ---
+        # بررسی مقاومت‌ها (Supply Zones)
         for zone in supply_zones:
-            if zone['score'] < ZONE_SCORE_MIN:
+            if zone.get('score', 0) < ZONE_SCORE_MIN:
                 continue
             
-            zone_price = zone['avg_price']
+            zone_price = zone['level_price']  # تغییر از avg_price به level_price
             final_score = self._calculate_confluence_score(zone, zone_price, fibonacci_data)
 
             if current_price < zone_price:
@@ -98,12 +132,12 @@ class StrategyEngine:
                 elif proximity_above < PROXIMITY_THRESHOLD:
                     return self._create_signal_dict('sr_flip_retest', locals(), final_score)
 
-        # --- تحلیل نواحی حمایت ---
+        # بررسی حمایت‌ها (Demand Zones)
         for zone in demand_zones:
-            if zone['score'] < ZONE_SCORE_MIN:
+            if zone.get('score', 0) < ZONE_SCORE_MIN:
                 continue
 
-            zone_price = zone['avg_price']
+            zone_price = zone['level_price']  # تغییر از avg_price به level_price
             proximity = abs(current_price - zone_price) / zone_price
 
             if proximity < PROXIMITY_THRESHOLD:
@@ -129,9 +163,9 @@ class StrategyEngine:
         }
         
         if 'resistance' in signal_type or 'breakout' in signal_type:
-            signal['level_broken'] = zone['avg_price']
+            signal['level_broken'] = zone['level_price']
         elif 'support' in signal_type or 'retest' in signal_type:
-            signal['support_level'] = zone['avg_price']
+            signal['support_level'] = zone['level_price']
             
         return signal
 
@@ -245,9 +279,25 @@ class StrategyEngine:
     async def detect_gem_momentum_signal(self, df_5min, token_info):
         """استراتژی اختصاصی برای شکار توکن‌های جدید (Gem Hunter)."""
         
+        # ===== کد جدید از اینجا =====
+        # بررسی که توکن واقعاً جدید باشه
+        if len(df_5min) > 288:  # بیشتر از 24 ساعت داده (288 کندل 5 دقیقه‌ای)
+            self.logger.info(f"⏭️ {token_info['symbol']}: Too old for GEM strategy ({len(df_5min)} candles)")
+            return None
+        
+        # بررسی که قیمت در روند صعودی کلی باشه
+        if len(df_5min) > 12:  # حداقل 1 ساعت داده
+            price_1h_ago = df_5min['close'].iloc[-12]
+            current_price_check = df_5min['close'].iloc[-1]
+            
+            if current_price_check < price_1h_ago * 0.8:  # اگر بیش از 20% افت داشته
+                self.logger.info(f"📉 {token_info['symbol']}: Downtrend detected, skipping GEM signal")
+                return None
+        # ===== پایان کد جدید =====
+        
         current_price = df_5min['close'].iloc[-1]
         ath = df_5min['high'].max() # All-Time High در بازه دریافتی
-
+        
         # --- استراتژی ۱: الگوی خرید در اولین پولبک (First Dip Buy) ---
         if len(df_5min) >= 24: # حداقل ۲ ساعت داده لازم است
             dip_from_ath = (ath - current_price) / ath if ath > 0 else 0

@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import matplotlib.patches as patches
 import io
+from zone_config import *
 
 class AnalysisEngine:
     def __init__(self):
@@ -79,7 +80,15 @@ class AnalysisEngine:
             return None
             
         # Calculate zones
-        supply_zones, demand_zones = self.find_major_zones(df, period=5)
+        # شناسایی Origin Zone (برای توکن‌های جدید)
+        origin_zone = self.find_origin_zone(df)
+        
+        # شناسایی Major Zones
+        market_zones = self.find_market_structure_zones(df)
+        
+        # تفکیک zones به supply و demand
+        supply_zones = [z for z in market_zones if z['zone_type'] == 'resistance']
+        demand_zones = [z for z in market_zones if z['zone_type'] == 'support']
             
         # Calculate fibonacci
         fibonacci_data = self._calculate_fibonacci_levels(df)
@@ -103,7 +112,8 @@ class AnalysisEngine:
             'technical_levels': {
                 'zones': {
                     'supply': supply_zones,
-                    'demand': demand_zones
+                    'demand': demand_zones,
+                    'origin': origin_zone
                 },
                 'fibonacci': fibonacci_data,
                 'moving_averages': {
@@ -183,6 +193,166 @@ class AnalysisEngine:
         true_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
         atr = true_range.rolling(window=period).mean()
         return atr
+
+    def find_origin_zone(self, df):
+        """شناسایی Origin Zone - محل تولد قیمت و شروع حرکت اصلی"""
+        if len(df) < ORIGIN_CONSOLIDATION_MIN:
+            return None
+            
+        # پیدا کردن پایین‌ترین قیمت
+        lowest_idx = df['low'].idxmin()
+        lowest_price = df['low'].iloc[lowest_idx]
+        
+        # بررسی محدوده تجمع اولیه (20 کندل اول)
+        consolidation_end = min(lowest_idx + ORIGIN_CONSOLIDATION_MIN, len(df) - 1)
+        consolidation_range = df.iloc[lowest_idx:consolidation_end]
+        
+        if len(consolidation_range) < 10:
+            return None
+            
+        # محاسبه نوسان در محدوده
+        range_high = consolidation_range['high'].max()
+        range_low = consolidation_range['low'].min()
+        range_percent = (range_high - range_low) / range_low if range_low > 0 else 0
+        
+        # بررسی پامپ بعدی
+        if consolidation_end < len(df) - 1:
+            post_pump_data = df.iloc[consolidation_end:]
+            max_price_after = post_pump_data['high'].max()
+            pump_percent = (max_price_after - range_high) / range_high if range_high > 0 else 0
+            
+            # اگر شرایط Origin تأیید شد
+            if range_percent <= ORIGIN_RANGE_MAX and pump_percent >= ORIGIN_PUMP_MIN:
+                return {
+                    'zone_type': 'origin',
+                    'zone_bottom': range_low,
+                    'zone_top': range_high,
+                    'consolidation_candles': len(consolidation_range),
+                    'pump_percent': pump_percent
+                }
+        
+        return None
+
+    def find_market_structure_zones(self, df):
+        """شناسایی Major Zones با سیستم امتیازدهی پیشرفته"""
+        if len(df) < 30:
+            return []
+        
+        atr = self.calculate_atr(df)
+        avg_atr = atr.mean()
+        if pd.isna(avg_atr) or avg_atr == 0:
+            return []
+        
+        # شناسایی Swing Points
+        highs = df['high'].values
+        lows = df['low'].values
+        
+        # پیدا کردن نقاط برگشت مهم
+        high_points = argrelextrema(highs, np.greater, order=5)[0]
+        low_points = argrelextrema(lows, np.less, order=5)[0]
+        
+        zones = []
+        avg_volume = df['volume'].mean()
+        
+        # بررسی Swing Highs
+        for idx in high_points:
+            if idx < 10 or idx > len(df) - 10:
+                continue
+                
+            level_price = highs[idx]
+            
+            # شمارش تعداد برخورد
+            touches = 0
+            reactions = []
+            
+            for i in range(len(df)):
+                if abs(df['high'].iloc[i] - level_price) / level_price < 0.005:
+                    touches += 1
+                    if i + 5 < len(df):
+                        reaction = abs(df['close'].iloc[i+5] - level_price) / avg_atr
+                        reactions.append(reaction)
+            
+            if touches >= 3:
+                score = self._calculate_zone_score(
+                    touches, reactions, df['volume'].iloc[idx], 
+                    avg_volume, 'resistance'
+                )
+                
+                if score >= MIN_ZONE_SCORE:
+                    zones.append({
+                        'zone_type': 'resistance',
+                        'level_price': level_price,
+                        'touches': touches,
+                        'score': score
+                    })
+        
+        # بررسی Swing Lows (مشابه بالا برای حمایت)
+        for idx in low_points:
+            if idx < 10 or idx > len(df) - 10:
+                continue
+                
+            level_price = lows[idx]
+            touches = 0
+            reactions = []
+            
+            for i in range(len(df)):
+                if abs(df['low'].iloc[i] - level_price) / level_price < 0.005:
+                    touches += 1
+                    if i + 5 < len(df):
+                        reaction = abs(df['close'].iloc[i+5] - level_price) / avg_atr
+                        reactions.append(reaction)
+            
+            if touches >= 3:
+                score = self._calculate_zone_score(
+                    touches, reactions, df['volume'].iloc[idx],
+                    avg_volume, 'support'
+                )
+                
+                if score >= MIN_ZONE_SCORE:
+                    zones.append({
+                        'zone_type': 'support',
+                        'level_price': level_price,
+                        'touches': touches,
+                        'score': score
+                    })
+        
+        # مرتب‌سازی و انتخاب بهترین zones
+        zones.sort(key=lambda x: x['score'], reverse=True)
+        # فیلتر zones خیلی نزدیک به هم
+        filtered_zones = []
+        for zone in zones:
+            too_close = False
+            for existing in filtered_zones:
+                if abs(zone['level_price'] - existing['level_price']) / zone['level_price'] < 0.03:
+                    too_close = True
+                    break
+            if not too_close:
+                filtered_zones.append(zone)
+        
+        # مرتب‌سازی و انتخاب بهترین zones
+        filtered_zones.sort(key=lambda x: x['score'], reverse=True)
+        return filtered_zones[:3]  # حداکثر 3 zone
+
+    def _calculate_zone_score(self, touches, reactions, volume, avg_volume, zone_type):
+        """محاسبه امتیاز یک Zone بر اساس معیارهای مختلف"""
+        # امتیاز تعداد برخورد
+        touch_score = min(touches, 10) * WEIGHT_TOUCHES
+        
+        # امتیاز قدرت واکنش
+        avg_reaction = np.mean(reactions) if reactions else 0
+        reaction_score = min(avg_reaction, 10) * WEIGHT_REACTION
+        
+        # امتیاز حجم
+        volume_ratio = volume / avg_volume if avg_volume > 0 else 1
+        volume_score = min(volume_ratio, 10) * WEIGHT_VOLUME
+        
+        # امتیاز S/R Flip (فعلاً ساده)
+        sr_flip_score = 3 * WEIGHT_SR_FLIP if touches > 3 else 0
+        
+        # جمع امتیازات
+        total_score = touch_score + reaction_score + volume_score + sr_flip_score
+        
+        return total_score
 
     def find_fractals(self, highs, lows, period=5):
         """پیدا کردن فرکتال‌های 5 کندلی"""
@@ -385,27 +555,59 @@ class AnalysisEngine:
 
         chart_end_time = timestamps[-1] + (timestamps[-1] - timestamps[0]) * 0.1
    
-        major_supply = technical_levels['zones']['supply']
-        major_demand = technical_levels['zones']['demand']
-
-        for cluster in major_supply:
-            zone_top = cluster['avg_price']
-            zone_bottom = zone_top * (1 - 0.005)
+        # دریافت zones
+        origin_zone = technical_levels['zones'].get('origin')
+        supply_zones = technical_levels['zones']['supply']
+        demand_zones = technical_levels['zones']['demand']
+        
+        # رسم Origin Zone (نارنجی)
+        if origin_zone:
+            zone_bottom = origin_zone['zone_bottom']
+            zone_top = origin_zone['zone_top']
             start_num = mdates.date2num(timestamps[0])
             end_num = mdates.date2num(chart_end_time)
             width_num = end_num - start_num
+            
             rect = patches.Rectangle((start_num, zone_bottom), width_num, zone_top - zone_bottom,
-                                    facecolor='orange', alpha=0.25, edgecolor='orange', linewidth=2)
+                                    facecolor=ORIGIN_ZONE_COLOR, alpha=ORIGIN_ZONE_ALPHA,
+                                    edgecolor=ORIGIN_ZONE_COLOR, linewidth=2,
+                                    label='Origin Zone')
             ax.add_patch(rect)
-   
-        for cluster in major_demand:
-            zone_bottom = cluster['avg_price']
-            zone_top = zone_bottom * (1 + 0.005)
+        
+        # رسم Major Supply Zones (آبی - مقاومت)
+        for zone in supply_zones:
+            zone_price = zone['level_price']
+            zone_score = zone.get('score', 5)
+            
+            # عرض داینامیک بر اساس score
+            zone_height = zone_price * 0.005 * (1 + 0.2 * (zone_score / 10))
+            zone_bottom = zone_price - (zone_height / 2)
+            
             start_num = mdates.date2num(timestamps[0])
             end_num = mdates.date2num(chart_end_time)
             width_num = end_num - start_num
-            rect = patches.Rectangle((start_num, zone_bottom), width_num, zone_top - zone_bottom,
-                                    facecolor='purple', alpha=0.25, edgecolor='purple', linewidth=2)
+            
+            rect = patches.Rectangle((start_num, zone_bottom), width_num, zone_height,
+                                    facecolor=MAJOR_ZONE_COLOR, alpha=MAJOR_ZONE_ALPHA,
+                                    edgecolor=MAJOR_ZONE_COLOR, linewidth=1.5)
+            ax.add_patch(rect)
+        
+        # رسم Major Demand Zones (آبی - حمایت)
+        for zone in demand_zones:
+            zone_price = zone['level_price']
+            zone_score = zone.get('score', 5)
+            
+            # عرض داینامیک بر اساس score
+            zone_height = zone_price * 0.005 * (1 + 0.2 * (zone_score / 10))
+            zone_bottom = zone_price - (zone_height / 2)
+            
+            start_num = mdates.date2num(timestamps[0])
+            end_num = mdates.date2num(chart_end_time)
+            width_num = end_num - start_num
+            
+            rect = patches.Rectangle((start_num, zone_bottom), width_num, zone_height,
+                                    facecolor=MAJOR_ZONE_COLOR, alpha=MAJOR_ZONE_ALPHA,
+                                    edgecolor=MAJOR_ZONE_COLOR, linewidth=1.5)
             ax.add_patch(rect)
        
         ax.grid(True, alpha=0.3, color='#333333')

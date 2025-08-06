@@ -86,7 +86,7 @@ async def chart_message_handler(update: Update, context: ContextTypes.DEFAULT_TY
     """Handle token address for chart creation"""
     message = update.message.text
     
-    if len(message) == 44 and message.isalnum():
+    if len(message) >= 32 and len(message) <= 50:  # آدرس‌های سولانا معمولاً 32-44 کاراکتر
         context.user_data['token'] = message
        
         keyboard = [
@@ -101,7 +101,7 @@ async def chart_message_handler(update: Update, context: ContextTypes.DEFAULT_TY
         reply_markup = InlineKeyboardMarkup(keyboard)
         await update.message.reply_text("📊 Select timeframe:", reply_markup=reply_markup)
     else:
-        await update.message.reply_text("Send a valid Solana token address (44 characters)")
+        await update.message.reply_text("Send a valid Solana token address (32-50 characters)")
 
 async def chart_button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle timeframe button selection"""
@@ -127,46 +127,108 @@ async def chart_button_callback(update: Update, context: ContextTypes.DEFAULT_TY
         
         # Find pool and create chart
         search_url = f"https://api.geckoterminal.com/api/v2/search/pools?query={token_address}"
+        print(f"🔍 DEBUG: Searching for token: {token_address}")
+        print(f"🔍 DEBUG: Search URL: {search_url}")
         
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(search_url)
+            print(f"🔍 DEBUG: API Response Status: {response.status_code}")
+            
             if response.status_code == 200:
                 data = response.json()
                 pools = data.get('data', [])
-                print(f"🔍 DEBUG: Search URL: {search_url}")
                 print(f"🔍 DEBUG: Found {len(pools)} pools")
+                
                 if pools:
-                    best_pool = pools[0]
-                    pool_id = best_pool['id']
+                    # انتخاب بهترین pool بر اساس volume
+                    best_pool = None
+                    max_volume = 0
                     
+                    for pool in pools:
+                        try:
+                            volume = float(pool.get('attributes', {}).get('volume_usd', {}).get('h24', 0))
+                            if volume > max_volume:
+                                max_volume = volume
+                                best_pool = pool
+                        except:
+                            continue
+                    
+                    if not best_pool:
+                        best_pool = pools[0]  # fallback به اولین pool
+                    
+                    pool_id = best_pool['id']
+                    print(f"🔍 DEBUG: Selected Pool ID: {pool_id}")
+                    
+                    # استخراج symbol
+                    symbol = "Unknown"
                     try:
                         relationships = best_pool.get('relationships', {})
                         base_token = relationships.get('base_token', {}).get('data', {})
-                        symbol = base_token.get('id', 'Unknown').split('_')[-1]
-                    except:
+                        if base_token:
+                            symbol = base_token.get('id', '').split('_')[-1]
+                        
+                        # اگر symbol هنوز Unknown است، از attributes امتحان کن
+                        if symbol == "Unknown" or not symbol:
+                            attributes = best_pool.get('attributes', {})
+                            symbol = attributes.get('name', 'Unknown').split('/')[0]
+                        
+                        print(f"🔍 DEBUG: Extracted Symbol: {symbol}")
+                    except Exception as symbol_error:
+                        print(f"⚠️ DEBUG: Symbol extraction error: {symbol_error}")
                         symbol = "Unknown"
                     
-                    # اول analysis کن
-                    analysis_result = await analysis_engine.perform_full_analysis(pool_id, timeframe, aggregate, symbol)
+                    # تحلیل و ساخت چارت
+                    print(f"🔄 DEBUG: Starting analysis for {symbol}...")
+                    analysis_result = await analysis_engine.perform_full_analysis(
+                        pool_id, timeframe, aggregate, symbol
+                    )
+                    
+                    print(f"🔍 DEBUG: Analysis result exists: {analysis_result is not None}")
+                    
                     if analysis_result:
-                        chart_image = await analysis_engine.create_chart(analysis_result)
+                        # بررسی کیفیت داده‌ها
+                        df = analysis_result.get('raw_data', {}).get('dataframe')
+                        if df is not None and not df.empty:
+                            print(f"🔍 DEBUG: DataFrame shape: {df.shape}")
+                            print(f"🔍 DEBUG: Current price: {analysis_result.get('raw_data', {}).get('current_price')}")
+                            
+                            print("🎨 DEBUG: Creating chart...")
+                            chart_image = await analysis_engine.create_chart(analysis_result)
+                            print(f"🔍 DEBUG: Chart image exists: {chart_image is not None}")
+                            
+                            if chart_image:
+                                await query.message.reply_photo(
+                                    photo=chart_image,
+                                    caption=f"📊 {symbol} {display_name} Chart"
+                                )
+                                print("✅ DEBUG: Chart sent successfully!")
+                            else:
+                                await query.message.reply_text("❌ Could not create chart - Image generation failed")
+                        else:
+                            await query.message.reply_text("❌ Could not create chart - No price data available")
+                            print("❌ DEBUG: Empty or invalid DataFrame")
                     else:
-                        chart_image = None
-                    if chart_image:
-                        await query.message.reply_photo(
-                            photo=chart_image,
-                            caption=f"📊 {symbol} {display_name} Chart"
-                        )
-                    else:
-                        await query.message.reply_text("❌ Could not create chart")
+                        await query.message.reply_text("❌ Could not create chart - Analysis failed")
+                        print("❌ DEBUG: Analysis result is None")
+                        
                 else:
-                    await query.message.reply_text("❌ Token not found")
+                    await query.message.reply_text("❌ Token not found in any pools")
+                    print("❌ DEBUG: No pools found for this token")
             else:
-                await query.message.reply_text("❌ Token not found")
+                await query.message.reply_text(f"❌ API Error: {response.status_code}")
                 print(f"❌ DEBUG: API request failed with status {response.status_code}")
-
+                try:
+                    error_data = response.json()
+                    print(f"❌ DEBUG: API Error details: {error_data}")
+                except:
+                    print(f"❌ DEBUG: API Error response: {response.text[:200]}")
+    
     except Exception as e:
-        await query.message.reply_text(f"❌ Error: {str(e)}")
+        error_msg = f"❌ Error: {str(e)}"
+        await query.message.reply_text(error_msg)
+        print(f"❌ DEBUG: Exception occurred: {e}")
+        import traceback
+        print(f"❌ DEBUG: Full traceback:\n{traceback.format_exc()}")
 
 async def trending_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /trending command"""

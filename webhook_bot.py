@@ -85,7 +85,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def chart_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle token address for chart creation"""
     message = update.message.text
-    
+    print(f"🔍 DEBUG: Received message: {message}")
+    print(f"🔍 DEBUG: Message length: {len(message)}")    
+
     if len(message) >= 32 and len(message) <= 50:  # آدرس‌های سولانا معمولاً 32-44 کاراکتر
         context.user_data['token'] = message
        

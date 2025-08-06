@@ -74,25 +74,20 @@ class AnalysisEngine:
     async def _do_full_analysis(self, pool_id, timeframe, aggregate, symbol):
         """Core analysis logic - computes all technical data"""
         from datetime import datetime
-
+        
         # Get historical data
         print(f"🔄 DEBUG: Starting analysis - Pool: {pool_id}, TF: {timeframe}/{aggregate}")
-    
+        
         df = await self.get_historical_data(pool_id, timeframe, aggregate, limit=500)
         print(f"🔍 DEBUG: Historical data shape: {df.shape if df is not None and not df.empty else 'Empty/None'}")
-    
+        
         if df is None or df.empty:
             print(f"❌ DEBUG: No historical data for {timeframe}/{aggregate}")
             return None
-    
+        
         if len(df) < 30:
             print(f"❌ DEBUG: Insufficient data - only {len(df)} candles")
             return None
-
-    # ادامه کد...
-    # Calculate zones
-    origin_zone = self.find_origin_zone(df)
-    # ... بقیه کد
             
         # Calculate zones
         # شناسایی Origin Zone (برای توکن‌های جدید)

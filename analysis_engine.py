@@ -305,7 +305,7 @@ class AnalysisEngine:
                         reaction = abs(df['close'].iloc[i+5] - level_price) / avg_atr
                         reactions.append(reaction)
             
-            if touches >= 3:
+            if touches >= 2:
                 score = self._calculate_zone_score(
                     touches, reactions, df['volume'].iloc[idx], 
                     avg_volume, 'resistance'
@@ -335,7 +335,7 @@ class AnalysisEngine:
                         reaction = abs(df['close'].iloc[i+5] - level_price) / avg_atr
                         reactions.append(reaction)
             
-            if touches >= 3:
+            if touches >= 2:
                 score = self._calculate_zone_score(
                     touches, reactions, df['volume'].iloc[idx],
                     avg_volume, 'support'

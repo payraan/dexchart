@@ -6,8 +6,8 @@ ORIGIN_RANGE_MAX = 0.5  # حداکثر نوسان 50% در محدوده
 ORIGIN_PUMP_MIN = 0.5  # حداقل پامپ 50% بعد از Origin
 
 # Major Zone Parameters  
-MAX_MAJOR_ZONES = 5  # حداکثر تعداد Major Zones
-MIN_ZONE_SCORE = 4.0  # حداقل امتیاز برای یک Zone معتبر
+MAX_MAJOR_ZONES = 7  # حداکثر تعداد Major Zones
+MIN_ZONE_SCORE = 1.5  # حداقل امتیاز برای یک Zone معتبر
 ZONE_MERGE_THRESHOLD = 1.0  # ضریب ATR برای ادغام zones نزدیک
 
 # Zone Scoring Weights

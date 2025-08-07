@@ -128,6 +128,9 @@ class StrategyEngine:
 
         # بررسی مقاومت‌ها (Supply Zones)
         for zone in supply_zones:
+            # فیلتر zones نامنطقی: supply zone باید بالاتر از قیمت باشه
+            if zone['level_price'] < current_price:
+                continue
             if zone.get('score', 0) < ZONE_SCORE_MIN:
                 continue
         
@@ -137,11 +140,14 @@ class StrategyEngine:
             # فقط بعد از شکست سیگنال بده
             if current_price > zone_price:
                 proximity_above = (current_price - zone_price) / zone_price
-                if proximity_above < 0.02:  # فقط تا 2% بعد از شکست
+                if proximity_above < 0.08:  # تا 8% بعد از شکست
                     return self._create_signal_dict('resistance_breakout', locals(), final_score)
 
         # بررسی حمایت‌ها (Demand Zones)
         for zone in demand_zones:
+            # فیلتر zones نامنطقی: demand zone باید پایین‌تر از قیمت باشه
+            if zone['level_price'] > current_price:
+                continue
             if zone.get('score', 0) < ZONE_SCORE_MIN:
                 continue
 
@@ -155,27 +161,30 @@ class StrategyEngine:
         return None
 
     def _create_signal_dict(self, signal_type, local_vars, final_score):
-        """Helper function to create a consistent signal dictionary."""
-        from datetime import datetime
-        zone = local_vars['zone']
-        
-        signal = {
-            'signal_type': signal_type,
-            'token_address': local_vars['token_address'],
-            'pool_id': local_vars['pool_id'],
-            'symbol': local_vars['symbol'],
-            'current_price': local_vars['current_price'],
-            'zone_score': zone['score'],
-            'final_score': final_score,
-            'timestamp': datetime.now().isoformat()
-        }
-        
-        if 'resistance' in signal_type or 'breakout' in signal_type:
-            signal['level_broken'] = zone['level_price']
-        elif 'support' in signal_type or 'retest' in signal_type:
-            signal['support_level'] = zone['level_price']
-            
-        return signal
+       """Helper function to create a consistent signal dictionary."""
+       from datetime import datetime
+       zone = local_vars['zone']
+       current_price = local_vars['current_price']
+       zone_price = zone['level_price']
+
+       signal = {
+           'signal_type': signal_type,
+           'token_address': local_vars['token_address'],
+           'pool_id': local_vars['pool_id'],
+           'symbol': local_vars['symbol'],
+           'current_price': current_price,
+           'zone_score': zone['score'],
+           'final_score': final_score,
+           'timestamp': datetime.now().isoformat()
+       }
+
+       # فقط level مناسب رو اضافه کن
+       if 'resistance' in signal_type or 'breakout' in signal_type:
+           signal['level_broken'] = zone_price
+       elif 'support' in signal_type or 'retest' in signal_type:
+           signal['support_level'] = zone_price
+
+       return signal
 
     def _calculate_confluence_score(self, zone, zone_price, fibonacci_data):
         """Calculate confluence score between a zone and fibonacci levels."""

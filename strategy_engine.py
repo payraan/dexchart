@@ -156,6 +156,8 @@ class StrategyEngine:
 
             if proximity < PROXIMITY_THRESHOLD:
                 final_score = self._calculate_confluence_score(zone, zone_price, fibonacci_data)
+                if final_score < 7.0:
+                    continue
                 return self._create_signal_dict('support_test', locals(), final_score)
 
         return None

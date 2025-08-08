@@ -143,7 +143,7 @@ class BackgroundScanner:
                        age_days = age_hours / 24
                    
                    # تصمیم‌گیری بر اساس عمر واقعی
-                   if age_days < 1:  # توکن‌های زیر 1 روز
+                   if age_days < 5:  # توکن‌های زیر 1 روز
                        self.logger.info(f"💎 [GEM HUNTER] Routing {token['symbol']} (Age: {age_days:.2f} days / {age_hours:.1f} hours)")
                        df_5min = await self.strategy_engine.analysis_engine.get_historical_data(
                            token['pool_id'], "minute", "5", limit=300

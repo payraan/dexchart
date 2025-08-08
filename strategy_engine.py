@@ -156,7 +156,7 @@ class StrategyEngine:
 
             if proximity < PROXIMITY_THRESHOLD:
                 final_score = self._calculate_confluence_score(zone, zone_price, fibonacci_data)
-                if final_score < 7.0:
+                if final_score < 3.0:
                     continue
                 return self._create_signal_dict('support_test', locals(), final_score)
 
@@ -298,9 +298,10 @@ class StrategyEngine:
     async def detect_gem_momentum_signal(self, df_5min, token_info):
         """استراتژی اختصاصی برای شکار توکن‌های جدید (Gem Hunter)."""
         
-        # ===== کد جدید از اینجا =====
+        self.logger.info(f"🔍 GEM HUNTER analyzing {token_info['symbol']}: {len(df_5min)} candles available")
+        
         # بررسی که توکن واقعاً جدید باشه
-        if len(df_5min) > 288:  # بیشتر از 24 ساعت داده (288 کندل 5 دقیقه‌ای)
+        if len(df_5min) > 576:  # بیشتر از 24 ساعت داده (288 کندل 5 دقیقه‌ای)
             self.logger.info(f"⏭️ {token_info['symbol']}: Too old for GEM strategy ({len(df_5min)} candles)")
             return None
         
@@ -312,27 +313,51 @@ class StrategyEngine:
             if current_price_check < price_1h_ago * 0.8:  # اگر بیش از 20% افت داشته
                 self.logger.info(f"📉 {token_info['symbol']}: Downtrend detected, skipping GEM signal")
                 return None
-        # ===== پایان کد جدید =====
         
         current_price = df_5min['close'].iloc[-1]
         ath = df_5min['high'].max() # All-Time High در بازه دریافتی
         
-        # --- استراتژی ۲: الگوی شکست پس از تثبیت (Consolidation Breakout) ---
+        # --- استراتژی 1: حجم انفجاری ---
+        if len(df_5min) >= 10:
+            current_volume = df_5min['volume'].iloc[-1]
+            avg_volume = df_5min['volume'].iloc[-10:-1].mean()
+            
+            if avg_volume > 0 and current_volume > avg_volume * 2:  # حجم 5 برابر میانگین
+                self.logger.info(f"🚀 {token_info['symbol']}: Volume spike detected! Ratio: {current_volume/avg_volume:.1f}x")
+                return self._create_gem_signal('GEM_VOLUME_SPIKE', token_info, current_price, {
+                    "Volume Ratio": f"{current_volume/avg_volume:.1f}x"
+                }, df_5min)
+        
+        # --- استراتژی 2: الگوی شکست پس از تثبیت (Consolidation Breakout) ---
         if len(df_5min) >= 12: # حداقل ۱ ساعت داده لازم است
             last_12_candles = df_5min.iloc[-12:] # یک ساعت اخیر
             high_1h = last_12_candles['high'].max()
             low_1h = last_12_candles['low'].min()
             range_pct = (high_1h - low_1h) / current_price if current_price > 0 else 0
             
-            # آیا قیمت در یک ساعت گذشته در یک محدوده باریک (کمتر از ۲۰٪) تثبیت شده؟
-            if range_pct < 0.20:
+            self.logger.info(f"📊 {token_info['symbol']} - Range: {range_pct:.2%}, Current: {current_price:.8f}, High_1h: {high_1h:.8f}")
+            
+            # آیا قیمت در یک ساعت گذشته در یک محدوده باریک (کمتر از 35٪) تثبیت شده؟
+            if range_pct < 0.60:
                 # آیا قیمت در حال شکستن سقف این محدوده است؟
-                if current_price >= high_1h * 0.98:
-                    self.logger.info(f"💎 {token_info['symbol']}: Potential 'Consolidation Breakout' detected.")
+                if current_price >= high_1h * 0.75:
+                    self.logger.info(f"💎 {token_info['symbol']}: Consolidation Breakout detected!")
                     return self._create_gem_signal('GEM_BREAKOUT', token_info, current_price, {
                         "Consolidation Range": f"{range_pct:.1%}"
                     }, df_5min)
         
+        # --- استراتژی 3: رشد سریع قیمت ---
+        if len(df_5min) >= 6:  # حداقل 30 دقیقه داده
+            price_30m_ago = df_5min['close'].iloc[-6]
+            price_growth = (current_price - price_30m_ago) / price_30m_ago if price_30m_ago > 0 else 0
+            
+            if price_growth > 0.15:  # رشد بیش از 25% در 30 دقیقه
+                self.logger.info(f"🚀 {token_info['symbol']}: Rapid growth detected! {price_growth:.1%} in 30min")
+                return self._create_gem_signal('GEM_MOMENTUM', token_info, current_price, {
+                    "30min Growth": f"{price_growth:.1%}"
+                }, df_5min)
+        
+        self.logger.info(f"❌ {token_info['symbol']}: No GEM signal conditions met")
         return None
 
     def _create_gem_signal(self, signal_type, token_info, price, details, df):

@@ -6,6 +6,7 @@ from strategy_engine import StrategyEngine
 from telegram import Bot
 from config import Config
 from database_manager import db_manager
+from holder_analyzer import HolderAnalyzer
 
 class BackgroundScanner:
     def __init__(self, bot_token, chat_id, scan_interval=120):
@@ -18,6 +19,7 @@ class BackgroundScanner:
         self.logger = logging.getLogger(__name__)
         self.last_scan_time = None
         self.scan_count = 0
+        self.holder_analyzer = HolderAnalyzer()
         self.last_error = None
 
     async def send_signal_alert(self, signal):
@@ -29,13 +31,43 @@ class BackgroundScanner:
            analysis_result = signal.get('analysis_result')
            current_price = signal.get('current_price', 0)
 
+           # دریافت اطلاعات هولدر (قبل از ساخت پیام)
+           holder_info_text = ""
+           try:
+               holder_data = await self.holder_analyzer.get_holder_stats(token_address)
+               if holder_data:
+                   holder_parts = []
+                   
+                   # تعداد هولدرها
+                   if 'holder_count' in holder_data:
+                       holder_parts.append(f"👥 {holder_data['holder_count']:,}")
+                   
+                   # تغییرات
+                   if 'deltas' in holder_data:
+                       h1 = holder_data['deltas'].get('1hour', 0)
+                       if h1 != 0:
+                           emoji = "📈" if h1 > 0 else "📉"
+                           holder_parts.append(f"{emoji} 1h: {h1:+d}")
+                   
+                   # whale ها
+                   if 'breakdowns' in holder_data:
+                       whales = holder_data['breakdowns'].get('holders_over_100k_usd', 0)    
+                       if whales > 0:
+                           holder_parts.append(f"🐋 {whales}")
+                   
+                   if holder_parts:
+                       holder_info_text = "\n**Holders:** " + " | ".join(holder_parts)
+           except Exception as e:
+               self.logger.error(f"Error getting holder data: {e}")
+
            # ساخت پیام بر اساس نوع سیگنال
            if signal_type.startswith('GEM_'):
                message = (
                    f"💎 *GEM HUNTER ALERT* 💎\n\n"
                    f"**Token:** *{symbol}*\n"
-                   f"**Signal:** `{signal_type}`\n"
+                   f"**Signal:** `{signal_type}`\n"                 
                    f"**Price:** `${current_price:.8f}`\n\n"
+                   f"{holder_info_text}\n"
                    f"**Details:** `{signal.get('details', 'N/A')}`\n"
                    f"Time: `{signal.get('timestamp', '')}`"
                )
@@ -47,6 +79,7 @@ class BackgroundScanner:
                    f"**Zone Score:** `{signal.get('zone_score', 0):.1f}/10`\n"
                    f"**Final Score:** `{signal.get('final_score', 0):.1f}/10`\n"
                    f"**Current Price:** `${current_price:.6f}`\n"
+                   f"{holder_info_text}\n"
                    f"**Support Level:** `${support_level:.6f}`\n"
                    f"**Distance:** `{((current_price - support_level) / support_level * 100):+.1f}%`\n\n"
                    f"Time: `{signal.get('timestamp', '')}`"
@@ -59,6 +92,7 @@ class BackgroundScanner:
                    f"**Zone Score:** `{signal.get('zone_score', 0):.1f}/10`\n"
                    f"**Final Score:** `{signal.get('final_score', 0):.1f}/10`\n"
                    f"**Current Price:** `${current_price:.6f}`\n"
+                   f"{holder_info_text}\n"
                    f"**Broken Level:** `${broken_level:.6f}`\n"
                    f"**Breakout:** `{((current_price - broken_level) / broken_level * 100):+.1f}%`\n\n"
                    f"Time: `{signal.get('timestamp', '')}`"

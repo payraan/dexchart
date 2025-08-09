@@ -246,13 +246,13 @@ class StrategyEngine:
         
         # تعیین درصد تغییر مورد نیاز برای سیگنال جدید
         if signal_type.startswith('GEM_'):
-            price_change_threshold = 0.03  # 3% برای توکن‌های جدید
+            price_change_threshold = 0.10  # 3% برای توکن‌های جدید
             min_cooldown_hours = 0.5  # حداقل 30 دقیقه
         elif 'support' in signal_type.lower():
-            price_change_threshold = 0.02  # 2% برای سیگنال‌های حمایت
+            price_change_threshold = 0.08  # 2% برای سیگنال‌های حمایت
             min_cooldown_hours = 1.0
         else:
-            price_change_threshold = 0.025  # 2.5% برای بقیه
+            price_change_threshold = 0.09  # 2.5% برای بقیه
             min_cooldown_hours = 2.0
         
         # دریافت آخرین سیگنال مشابه از دیتابیس
@@ -270,11 +270,27 @@ class StrategyEngine:
         try:
             result = db_manager.fetchone(query, params)
             
+            # لاگ برای دیباگ
+            self.logger.info(f"🔍 Cooldown check for {signal.get('symbol')}: Result={result}")
+            
             if result:
-                last_price = float(result[0]) if result[0] else 0
-                last_timestamp = datetime.fromisoformat(result[1])
+                # اصلاح: result یک dictionary است، نه tuple
+                if isinstance(result, dict):
+                    last_price = float(result.get('price_at_alert', 0))
+                    last_timestamp = result.get('timestamp', '')
+                else:
+                    last_price = float(result[0]) if result[0] else 0
+                    last_timestamp = result[1] if len(result) > 1 else ''
+                
+                if not last_timestamp:
+                    return False
+                    
+                last_timestamp = datetime.fromisoformat(last_timestamp)
                 time_passed = (datetime.now() - last_timestamp).total_seconds() / 3600
                 
+                # لاگ دیباگ
+                self.logger.info(f"📊 Last: ${last_price:.10f}, Now: ${current_price:.10f}, Time: {time_passed:.1f}h")
+            
                 # چک کردن تغییر قیمت
                 if last_price > 0 and current_price > 0:
                     price_change = abs(current_price - last_price) / last_price
@@ -296,10 +312,6 @@ class StrategyEngine:
                         )
                         return False
                 
-                # اگر زمان کافی گذشته (fallback)
-                if time_passed >= min_cooldown_hours * 3:  # 3x minimum time
-                    return False
-                    
             return False  # اگر هیچ سیگنال قبلی نبود
             
         except Exception as e:

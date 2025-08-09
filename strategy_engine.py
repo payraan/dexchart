@@ -233,66 +233,77 @@ class StrategyEngine:
 
     # کد تابع has_recent_alert که در مرحله قبل اصلاح شد، در اینجا باید قرار گیرد
     # در strategy_engine.py
+
     async def has_recent_alert(self, signal, cooldown_hours=None):
         """
-        Checks for recent alerts. Supports dynamic cooldowns for different signal types.
+        Checks for recent alerts based on PRICE CHANGE, not just time.
+        Only allows new alert if price changed significantly.
         """
         from datetime import datetime, timedelta
 
-        # --- روتر Cooldown ---
         signal_type = signal.get('signal_type', '')
-       
+        current_price = signal.get('current_price', 0)
+        
+        # تعیین درصد تغییر مورد نیاز برای سیگنال جدید
         if signal_type.startswith('GEM_'):
-            # Cooldown کوتاه‌تر برای سیگنال‌های سریع Gem
-            cooldown_hours = 0.5  # 30 دقیقه
-        elif cooldown_hours is None:
-            # Cooldown پویا بر اساس تایم‌فریم برای سیگنال‌های تحلیل تکنیکال
-            try:
-                timeframe = signal['analysis_result']['metadata']['timeframe']
-                if timeframe == 'minute':
-                    cooldown_hours = 1
-                elif timeframe == 'hour':
-                    cooldown_hours = TradingConfig.COOLDOWN_HOURS
-                else:  # ← این خط مفقود بود!
-                    cooldown_hours = TradingConfig.COOLDOWN_HOURS
-            except (KeyError, TypeError):
-                # مقدار پیش‌فرض در صورت بروز خطا
-                cooldown_hours = TradingConfig.COOLDOWN_HOURS
-
-        # --- پایان روتر Cooldown ---
-    
-        level_price = signal.get('level_broken', signal.get('support_level'))
-    
-        # برای سیگنال‌های Gem که level ندارند، از خود آدرس توکن برای Cooldown استفاده می‌کنیم
-        if signal_type.startswith('GEM_'):
-            placeholder = "%s" if db_manager.is_postgres else "?"
-            cooldown_time = (datetime.now() - timedelta(hours=cooldown_hours)).isoformat()
-            query = f"""SELECT timestamp FROM alert_history 
-                        WHERE token_address = {placeholder} AND signal_type = {placeholder} AND timestamp > {placeholder}
-                        LIMIT 1"""
-            params = (signal['token_address'], signal_type, cooldown_time)
+            price_change_threshold = 0.03  # 3% برای توکن‌های جدید
+            min_cooldown_hours = 0.5  # حداقل 30 دقیقه
+        elif 'support' in signal_type.lower():
+            price_change_threshold = 0.02  # 2% برای سیگنال‌های حمایت
+            min_cooldown_hours = 1.0
         else:
-            # منطق فعلی برای سیگنال‌های مبتنی بر سطح قیمت
-            if level_price is None: return False
-            if hasattr(level_price, 'item'): level_price = level_price.item()
-            level_price = float(level_price)
-            tolerance = 0.005
-            price_min = level_price * (1 - tolerance)
-            price_max = level_price * (1 + tolerance)
-            cooldown_time = (datetime.now() - timedelta(hours=cooldown_hours)).isoformat()
-            placeholder = "%s" if db_manager.is_postgres else "?"
-            query = f"""SELECT timestamp FROM alert_history 
-                        WHERE token_address = {placeholder} AND level_price BETWEEN {placeholder} AND {placeholder} AND timestamp > {placeholder}
-                        LIMIT 1"""
-            params = (signal['token_address'], price_min, price_max, cooldown_time)
-
+            price_change_threshold = 0.025  # 2.5% برای بقیه
+            min_cooldown_hours = 2.0
+        
+        # دریافت آخرین سیگنال مشابه از دیتابیس
+        placeholder = "%s" if db_manager.is_postgres else "?"
+        query = f"""
+            SELECT price_at_alert, timestamp 
+            FROM alert_history 
+            WHERE token_address = {placeholder} 
+            AND signal_type = {placeholder}
+            ORDER BY timestamp DESC 
+            LIMIT 1
+        """
+        params = (signal['token_address'], signal_type)
+        
         try:
-            if db_manager.fetchone(query, params):
-                self.logger.info(f"🔵 [COOLDOWN] Cooldown active for {signal['symbol']} ({signal_type}) for {cooldown_hours}h.")
-                return True
-            return False
+            result = db_manager.fetchone(query, params)
+            
+            if result:
+                last_price = float(result[0]) if result[0] else 0
+                last_timestamp = datetime.fromisoformat(result[1])
+                time_passed = (datetime.now() - last_timestamp).total_seconds() / 3600
+                
+                # چک کردن تغییر قیمت
+                if last_price > 0 and current_price > 0:
+                    price_change = abs(current_price - last_price) / last_price
+                    
+                    # اگر قیمت کافی تغییر نکرده و زمان کافی نگذشته
+                    if price_change < price_change_threshold and time_passed < min_cooldown_hours:
+                        self.logger.info(
+                            f"🔵 [COOLDOWN] {signal['symbol']} ({signal_type}): "
+                            f"Price change only {price_change:.1%} (need {price_change_threshold:.1%}) "
+                            f"in {time_passed:.1f}h"
+                        )
+                        return True
+                    
+                    # اگر قیمت کافی تغییر کرده، سیگنال جدید OK است
+                    if price_change >= price_change_threshold:
+                        self.logger.info(
+                            f"✅ [PRICE-CHANGE] {signal['symbol']}: "
+                            f"Price changed {price_change:.1%}, new signal allowed"
+                        )
+                        return False
+                
+                # اگر زمان کافی گذشته (fallback)
+                if time_passed >= min_cooldown_hours * 3:  # 3x minimum time
+                    return False
+                    
+            return False  # اگر هیچ سیگنال قبلی نبود
+            
         except Exception as e:
-            self.logger.error(f"❌ Error in has_recent_alert for {signal['symbol']}: {e}")
+            self.logger.error(f"❌ Error in has_recent_alert: {e}")
             return False
  
     async def detect_gem_momentum_signal(self, df_5min, token_info):

@@ -86,47 +86,51 @@ class TokenCache:
         return []
 
     def process_trending_data(self, data):
-        """Process and save trending data to database with robust volume handling."""
+        """Process and save trending data to database"""
         tokens = []
         pools = data.get('data', [])
         included = data.get('included', [])
-
-        # Create a map of included tokens for faster lookup
-        token_map = {item.get('id'): item.get('attributes', {}) 
-                     for item in included if item.get('type') == 'token'}
+        
+        # Create a map of included tokens
+        token_map = {}
+        for item in included:
+            if item.get('type') == 'token':
+                token_id = item.get('id')
+                token_attrs = item.get('attributes', {})
+                token_map[token_id] = {
+                    'address': token_attrs.get('address', ''),
+                    'symbol': token_attrs.get('symbol', 'Unknown')
+                }
         
         for pool in pools:
             try:
                 attributes = pool.get('attributes', {})
                 relationships = pool.get('relationships', {})
                 
+                # Get base token info from relationships
                 base_token_rel = relationships.get('base_token', {}).get('data', {})
                 base_token_id = base_token_rel.get('id', '')
-                token_attrs = token_map.get(base_token_id, {})
+                base_token_info = token_map.get(base_token_id, {})
                 
-                token_address = token_attrs.get('address')
+                token_address = base_token_info.get('address', '')
+                token_symbol = base_token_info.get('symbol', 'Unknown')
                 base_token_price = attributes.get('base_token_price_usd')
-
+                
                 if not token_address or not base_token_price:
                     continue
-
-                # *** بخش کلیدی اصلاح شده برای حل مشکل حجم صفر ***
-                # این کد مطمئن می‌شود که 'volume_24h' همیشه به درستی خوانده و تبدیل به عدد می‌شود
-                volume_24h = float(attributes.get('volume_usd', {}).get('h24', 0))
-
+                    
                 token_data = {
                     'address': token_address,
-                    'symbol': token_attrs.get('symbol', 'Unknown'),
+                    'symbol': token_symbol,
                     'pool_id': pool.get('id', ''),
-                    'volume_24h': volume_24h, # استفاده از متغیر جدید و مطمئن
+                    'volume_24h': float(attributes.get('volume_usd', {}).get('h24', 0)),
                     'price_usd': float(base_token_price)
                 }
                 tokens.append(token_data)
             except (ValueError, TypeError, KeyError) as e:
-                # لاگ کردن خطا برای دیباگ بهتر در آینده
-                print(f"Error processing a pool data entry: {e}")
                 continue
         
+        # فقط یک بار ذخیره کن!
         if tokens:
             self.save_tokens(tokens)
         

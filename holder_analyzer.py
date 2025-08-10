@@ -3,12 +3,17 @@ import asyncio
 from typing import Dict, List, Optional
 from datetime import datetime
 import logging
+from config import TradingConfig
 
 class HolderAnalyzer:
-    def __init__(self, api_key: str = "14e3c68c1e547b0d52da17c9e34cf8c95e415a0d5187af12eda8e0218810269e"):
+    def __init__(self, api_key: str = TradingConfig.HOLDER_API_KEY):
+        # بررسی اینکه آیا کلید API در متغیرهای محیطی وجود دارد یا نه
+        if not api_key:
+            raise ValueError("HOLDER_API_KEY not found in environment variables.")
+        
         self.api_key = api_key
         self.base_url = "https://api.holderscan.com/v0"
-        self.headers = {"x-api-key": api_key}  # توجه: x-api-key نه Authorization
+        self.headers = {"x-api-key": api_key}  # استفاده از کلید خوانده شده
         self.logger = logging.getLogger(__name__)
         
     async def get_holder_stats(self, token_address: str) -> Optional[Dict]:

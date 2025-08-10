@@ -39,4 +39,4 @@ class TradingConfig:
    PROXIMITY_THRESHOLD = float(os.getenv("PROXIMITY_THRESHOLD", "0.08"))
    COOLDOWN_HOURS = float(os.getenv("COOLDOWN_HOURS", "2.0"))
    FIBONACCI_TOLERANCE = float(os.getenv("FIBONACCI_TOLERANCE", "0.02"))
-
+   HOLDER_API_KEY = os.getenv("HOLDER_API_KEY")

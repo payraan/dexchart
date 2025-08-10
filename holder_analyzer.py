@@ -14,45 +14,60 @@ class HolderAnalyzer:
     async def get_holder_stats(self, token_address: str) -> Optional[Dict]:
         """دریافت آمار کامل هولدرها برای یک توکن Solana"""
         self.logger.info(f"🔎 Fetching holder data for {token_address}")
-        
+
         chain_id = "sol"  # برای Solana
         holder_data = {}
-        
+
         try:
-            async with aiohttp.ClientSession() as session:
+            # ایجاد connector بدون SSL verification (برای حل مشکل macOS)
+            connector = aiohttp.TCPConnector(ssl=False)
+            async with aiohttp.ClientSession(connector=connector) as session:
                 # 1. دریافت تعداد هولدرها
                 holders_url = f"{self.base_url}/{chain_id}/tokens/{token_address}/holders?limit=1"
-                self.logger.info(f"Calling: {holders_url}")
                 
-                async with session.get(holders_url, headers=self.headers, timeout=10) as resp:
-                    self.logger.info(f"Status: {resp.status}")
-                    if resp.status == 200:
-                        data = await resp.json()
-                        holder_data['holder_count'] = data.get('holder_count', 0)
-                        self.logger.info(f"✅ Holders: {holder_data['holder_count']}")
-                    else:
-                        error = await resp.text()
-                        self.logger.error(f"API Error: {error}")
-                
-                # 2. دریافت تغییرات هولدرها
-                deltas_url = f"{self.base_url}/{chain_id}/tokens/{token_address}/holders/deltas"
-                async with session.get(deltas_url, headers=self.headers, timeout=10) as resp:
-                    if resp.status == 200:
-                        holder_data['deltas'] = await resp.json()
-                        self.logger.info(f"✅ Deltas: 1h={holder_data['deltas'].get('1hour', 0)}")
-                
-                # 3. دریافت توزیع هولدرها
-                breakdown_url = f"{self.base_url}/{chain_id}/tokens/{token_address}/holders/breakdowns"
-                async with session.get(breakdown_url, headers=self.headers, timeout=10) as resp:
-                    if resp.status == 200:
-                        holder_data['breakdowns'] = await resp.json()
-                        whales = holder_data['breakdowns'].get('holders_over_100k_usd', 0)
-                        self.logger.info(f"✅ Whales: {whales}")
-                
+                try:
+                    async with session.get(holders_url, headers=self.headers, timeout=5) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            holder_data['holder_count'] = data.get('holder_count', 0)
+                            self.logger.info(f"✅ Holders: {holder_data['holder_count']}")
+                        elif resp.status == 429:
+                            self.logger.warning(f"⚠️ Rate limited for {token_address[:8]}...")
+                            return None
+                        elif resp.status == 404:
+                            self.logger.info(f"❌ Token not found in HolderScan: {token_address[:8]}...")
+                            return None
+                except asyncio.TimeoutError:
+                    self.logger.warning(f"⏱️ Timeout getting holders for {token_address[:8]}...")
+                    return holder_data if holder_data else None
+
+                # 2. دریافت تغییرات هولدرها (فقط اگر holder_count موجود باشه)
+                if 'holder_count' in holder_data:
+                    deltas_url = f"{self.base_url}/{chain_id}/tokens/{token_address}/holders/deltas"
+                    try:
+                        async with session.get(deltas_url, headers=self.headers, timeout=3) as resp:
+                            if resp.status == 200:
+                                holder_data['deltas'] = await resp.json()
+                                self.logger.info(f"✅ Deltas: 1h={holder_data['deltas'].get('1hour', 0)}")
+                    except:
+                        pass  # اگر deltas نیومد، مهم نیست
+
+                # 3. دریافت توزیع هولدرها (فقط اگر holder_count موجود باشه)
+                if 'holder_count' in holder_data:
+                    breakdown_url = f"{self.base_url}/{chain_id}/tokens/{token_address}/holders/breakdowns"
+                    try:
+                        async with session.get(breakdown_url, headers=self.headers, timeout=3) as resp:
+                            if resp.status == 200:
+                                holder_data['breakdowns'] = await resp.json()
+                                whales = holder_data['breakdowns'].get('holders_over_100k_usd', 0)
+                                self.logger.info(f"✅ Whales: {whales}")
+                    except:
+                        pass  # اگر breakdowns نیومد، مهم نیست
+
                 return holder_data if holder_data else None
-                
+
         except Exception as e:
-            self.logger.error(f"❌ Error in get_holder_stats: {e}", exc_info=True)
+            self.logger.error(f"❌ Error in get_holder_stats: {e}")
             return None
     
     def enrich_signal_with_holders(self, signal: Dict, holder_data: Dict) -> Dict:

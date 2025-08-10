@@ -120,23 +120,54 @@ class BackgroundScanner:
            reply_to_message_id = result.get('last_message_id') if result and result.get('last_message_id') else None
 
            # ارسال پیام
-           if chart_image:
-               sent_message = await self.bot.send_photo(
-                   chat_id=self.chat_id, photo=chart_image, caption=message,
-                   parse_mode='Markdown', reply_to_message_id=reply_to_message_id
-               )
-               self.logger.info(f"📊 Chart + Alert for {symbol} sent.")
-           else:
-               sent_message = await self.bot.send_message(
-                   chat_id=self.chat_id, text=message, parse_mode='Markdown',
-                   reply_to_message_id=reply_to_message_id
-               )
-               self.logger.info(f"📱 Text alert for {symbol} sent.")
+           try:
+               if chart_image:
+                   try:
+                       sent_message = await asyncio.wait_for(
+                           self.bot.send_photo(
+                               chat_id=self.chat_id, 
+                               photo=chart_image, 
+                               caption=message,
+                               parse_mode='Markdown', 
+                               reply_to_message_id=reply_to_message_id
+                           ),
+                           timeout=10  # حداکثر 10 ثانیه
+                       )
+                       self.logger.info(f"📊 Chart + Alert for {symbol} sent.")
+                   except asyncio.TimeoutError:
+                       # اگر چارت timeout شد، پیام متنی بفرست
+                       sent_message = await asyncio.wait_for(
+                           self.bot.send_message(
+                               chat_id=self.chat_id, 
+                               text=message, 
+                               parse_mode='Markdown',
+                               reply_to_message_id=reply_to_message_id
+                           ),
+                           timeout=5
+                       )
+                       self.logger.info(f"📱 Text alert for {symbol} sent (chart timed out).")
+               else:
+                   sent_message = await asyncio.wait_for(
+                       self.bot.send_message(
+                           chat_id=self.chat_id, 
+                           text=message, 
+                           parse_mode='Markdown',
+                           reply_to_message_id=reply_to_message_id
+                       ),
+                       timeout=5
+                   )
+                   self.logger.info(f"📱 Text alert for {symbol} sent.")
 
-           # آپدیت message_id در دیتابیس
-           update_query = f"UPDATE watchlist_tokens SET last_message_id = {placeholder} WHERE address = {placeholder}"
-           db_manager.execute(update_query, (sent_message.message_id, token_address))
-       
+               # آپدیت message_id در دیتابیس
+               if sent_message:
+                   update_query = f"UPDATE watchlist_tokens SET last_message_id = {placeholder} WHERE address = {placeholder}"
+                   db_manager.execute(update_query, (sent_message.message_id, token_address))
+                   
+           except asyncio.TimeoutError:
+               self.logger.error(f"⏱️ Telegram timeout for {symbol} - skipping")
+           except Exception as e:
+               self.logger.error(f"❌ Error sending alert for {symbol}: {e}")
+
        except Exception as e:
            self.logger.error(f"❌ Error sending Telegram alert for {signal.get('symbol', 'N/A')}: {e}", exc_info=True)
 

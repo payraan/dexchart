@@ -324,6 +324,15 @@ class StrategyEngine:
         
         self.logger.info(f"🔍 GEM HUNTER analyzing {token_info['symbol']}: {len(df_gem)} candles available")
         
+        # ابتدا تحلیل کامل را انجام بده
+        analysis_result = await self.analysis_engine.perform_full_analysis(
+            token_info['pool_id'], timeframe, aggregate, token_info['symbol']
+        )
+        
+        if not analysis_result:
+            self.logger.info(f"❌ {token_info['symbol']}: Full analysis failed for GEM")
+            return None
+                
         # بررسی که توکن واقعاً جدید باشه
         if len(df_gem) > 576:  # بیشتر از 24 ساعت داده (288 کندل 5 دقیقه‌ای)
             self.logger.info(f"⏭️ {token_info['symbol']}: Too old for GEM strategy ({len(df_gem)} candles)")
@@ -350,7 +359,7 @@ class StrategyEngine:
                 self.logger.info(f"🚀 {token_info['symbol']}: Volume spike detected! Ratio: {current_volume/avg_volume:.1f}x")
                 return self._create_gem_signal('GEM_VOLUME_SPIKE', token_info, current_price, {
                     "Volume Ratio": f"{current_volume/avg_volume:.1f}x"
-            }, df_gem, timeframe, aggregate)
+                }, analysis_result)
         
         # --- استراتژی 2: الگوی شکست پس از تثبیت (Consolidation Breakout) ---
         if len(df_gem) >= 12: # حداقل ۱ ساعت داده لازم است
@@ -368,7 +377,7 @@ class StrategyEngine:
                     self.logger.info(f"💎 {token_info['symbol']}: Consolidation Breakout detected!")
                     return self._create_gem_signal('GEM_BREAKOUT', token_info, current_price, {
                         "Consolidation Range": f"{range_pct:.1%}"
-                    }, df_gem)
+                    }, analysis_result)
         
         # --- استراتژی 3: رشد سریع قیمت ---
         if len(df_gem) >= 6:  # حداقل 30 دقیقه داده
@@ -379,12 +388,12 @@ class StrategyEngine:
                 self.logger.info(f"🚀 {token_info['symbol']}: Rapid growth detected! {price_growth:.1%} in 30min")
                 return self._create_gem_signal('GEM_MOMENTUM', token_info, current_price, {
                     "30min Growth": f"{price_growth:.1%}"
-                }, df_gem)
+                }, analysis_result)
         
         self.logger.info(f"❌ {token_info['symbol']}: No GEM signal conditions met")
         return None
 
-    def _create_gem_signal(self, signal_type, token_info, price, details, df, timeframe="minute", aggregate="5"):
+    def _create_gem_signal(self, signal_type, token_info, price, details, analysis_result):
         """یک فرمت استاندارد برای سیگنال‌های Gem ایجاد می‌کند."""
         from datetime import datetime
         
@@ -399,9 +408,5 @@ class StrategyEngine:
         }
         
         # اضافه کردن analysis_result برای سازگاری با تابع ارسال هشدار
-        signal['analysis_result'] = {
-            'metadata': {'symbol': token_info['symbol'], 'timeframe': timeframe, 'aggregate': aggregate},
-            'raw_data': {'dataframe': df, 'current_price': price},
-            'technical_levels': {'zones': {'supply': [], 'demand': []}, 'fibonacci': None}
-        }
+        signal['analysis_result'] = analysis_result
         return signal

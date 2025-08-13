@@ -350,7 +350,7 @@ class StrategyEngine:
                 self.logger.info(f"🚀 {token_info['symbol']}: Volume spike detected! Ratio: {current_volume/avg_volume:.1f}x")
                 return self._create_gem_signal('GEM_VOLUME_SPIKE', token_info, current_price, {
                     "Volume Ratio": f"{current_volume/avg_volume:.1f}x"
-                }, df_gem)
+            }, df_gem, timeframe, aggregate)
         
         # --- استراتژی 2: الگوی شکست پس از تثبیت (Consolidation Breakout) ---
         if len(df_gem) >= 12: # حداقل ۱ ساعت داده لازم است
@@ -384,7 +384,7 @@ class StrategyEngine:
         self.logger.info(f"❌ {token_info['symbol']}: No GEM signal conditions met")
         return None
 
-    def _create_gem_signal(self, signal_type, token_info, price, details, df):
+    def _create_gem_signal(self, signal_type, token_info, price, details, df, timeframe="minute", aggregate="5"):
         """یک فرمت استاندارد برای سیگنال‌های Gem ایجاد می‌کند."""
         from datetime import datetime
         

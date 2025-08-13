@@ -259,11 +259,11 @@ class BackgroundScanner:
                     
                     if age_days < 5:
                         self.logger.info(f"💎 [GEM HUNTER] Routing {token['symbol']} (Age: {age_days:.2f} days / {age_hours:.1f} hours)")
-                        df_5min = await self.strategy_engine.analysis_engine.get_historical_data(
-                            token['pool_id'], "minute", "5", limit=300
+                        df_gem = await self.strategy_engine.analysis_engine.get_historical_data(
+                            token['pool_id'], timeframe, aggregate, limit=300
                         )
-                        if df_5min is not None and not df_5min.empty and len(df_5min) >= 12:
-                            signal = await self.strategy_engine.detect_gem_momentum_signal(df_5min, token)
+                        if df_gem is not None and not df_gem.empty and len(df_gem) >= 12:
+                            signal = await self.strategy_engine.detect_gem_momentum_signal(df_gem, token, timeframe, aggregate)
                         else:
                             self.logger.info(f"⏳ {token['symbol']} is too new, waiting for more 5m data...")
                     else:

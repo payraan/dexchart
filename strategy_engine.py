@@ -318,7 +318,8 @@ class StrategyEngine:
             self.logger.error(f"❌ Error in has_recent_alert: {e}")
             return False
  
-    async def detect_gem_momentum_signal(self, df_5min, token_info):
+    async def detect_gem_momentum_signal(self, df_gem, token_info, timeframe="minute", aggregate="5"):
+
         """استراتژی اختصاصی برای شکار توکن‌های جدید (Gem Hunter)."""
         
         self.logger.info(f"🔍 GEM HUNTER analyzing {token_info['symbol']}: {len(df_5min)} candles available")
@@ -399,7 +400,7 @@ class StrategyEngine:
         
         # اضافه کردن analysis_result برای سازگاری با تابع ارسال هشدار
         signal['analysis_result'] = {
-            'metadata': {'symbol': token_info['symbol'], 'timeframe': 'minute', 'aggregate': '5'},
+            'metadata': {'symbol': token_info['symbol'], 'timeframe': timeframe, 'aggregate': aggregate},
             'raw_data': {'dataframe': df, 'current_price': price},
             'technical_levels': {'zones': {'supply': [], 'demand': []}, 'fibonacci': None}
         }

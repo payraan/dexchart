@@ -66,7 +66,7 @@ class AnalysisEngine:
             
         # Check dataframe quality
         df = analysis_result['raw_data'].get('dataframe')
-        if df is None or df.empty or len(df) < 30:
+        if df is None or df.empty or len(df) < 10:
             return False
             
         return True
@@ -404,7 +404,7 @@ class AnalysisEngine:
         return supply_fractals, demand_fractals
 
     def find_major_zones(self, df, period=5):
-         if len(df) < 30:
+         if len(df) < 20:
              return [], []
 
          atr = self.calculate_atr(df, period=14)

@@ -281,15 +281,17 @@ class AnalysisEngine:
         lows = df['low'].values
         
         # پیدا کردن نقاط برگشت مهم
-        high_points = argrelextrema(highs, np.greater, order=5)[0]
-        low_points = argrelextrema(lows, np.less, order=5)[0]
+        order = 3 if len(df) < 100 else 5
+        high_points = argrelextrema(highs, np.greater, order=order)[0]
+        low_points = argrelextrema(lows, np.less, order=order)[0]
         
         zones = []
         avg_volume = df['volume'].mean()
         
         # بررسی Swing Highs
         for idx in high_points:
-            if idx < 10 or idx > len(df) - 10:
+            margin = min(5, len(df) // 4)
+            if idx < margin or idx > len(df) - margin:
                 continue
                 
             level_price = highs[idx]
@@ -305,7 +307,8 @@ class AnalysisEngine:
                         reaction = abs(df['close'].iloc[i+5] - level_price) / avg_atr
                         reactions.append(reaction)
             
-            if touches >= 2:
+            min_touches = 1 if len(df) < 100 else 2
+            if touches >= min_touches:
                 score = self._calculate_zone_score(
                     touches, reactions, df['volume'].iloc[idx], 
                     avg_volume, 'resistance'

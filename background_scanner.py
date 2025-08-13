@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from token_health import TokenHealthChecker
 from datetime import datetime
 from token_cache import TokenCache
@@ -293,12 +294,17 @@ class BackgroundScanner:
     async def start_scanning(self):
         """اسکن مداوم پس‌زمینه را آغاز می‌کند."""
         self.running = True
-        self.logger.info(f"🚀 Background scanner started (Interval: {self.scan_interval}s).")
+        last_fetch_time = 0
+        FETCH_INTERVAL = 600  # 10 دقیقه = 600 ثانیه
+        
+        self.logger.info(f"🚀 Background scanner started (Interval: {self.scan_interval}s, Token refresh: {FETCH_INTERVAL}s).")
 
+        # Initial fetch برای شروع سریع‌تر
         try:
             initial_tokens = await self.token_cache.fetch_trending_tokens()
             if initial_tokens:
                 self.logger.info(f"✅ Initial token list with {len(initial_tokens)} tokens fetched and saved.")
+                last_fetch_time = time.time()
             else:
                 self.logger.warning("Initial token list could not be fetched.")
         except Exception as e:
@@ -306,9 +312,26 @@ class BackgroundScanner:
 
         while self.running:
             try:
+                current_time = time.time()
+                
+                # هر 10 دقیقه توکن‌های جدید را دریافت کن
+                if current_time - last_fetch_time >= FETCH_INTERVAL:
+                    self.logger.info("🔄 Fetching latest trending tokens from API...")
+                    try:
+                        new_tokens = await self.token_cache.fetch_trending_tokens()
+                        if new_tokens:
+                            self.logger.info(f"✅ Updated token list with {len(new_tokens)} tokens.")
+                            last_fetch_time = current_time
+                        else:
+                            self.logger.warning("⚠️ Could not fetch new tokens, using existing list.")
+                    except Exception as e:
+                        self.logger.error(f"❌ Error fetching new tokens: {e}")
+                
+                # اسکن توکن‌ها با داده‌های به‌روز
                 await self.scan_tokens()
                 self.logger.info(f"⏳ Waiting {self.scan_interval} seconds for the next scan...")
                 await asyncio.sleep(self.scan_interval)
+                
             except KeyboardInterrupt:
                 self.running = False
             except Exception as e:
@@ -316,5 +339,5 @@ class BackgroundScanner:
                 self.logger.critical(f"❌ CRITICAL SCANNER ERROR: {e}", exc_info=True)
                 self.logger.info("⏳ Waiting 60 seconds due to critical error...")
                 await asyncio.sleep(60)
-        
+
         self.logger.info("\n🛑 Scanner stopped.")

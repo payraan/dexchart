@@ -68,6 +68,7 @@ class BackgroundScanner:
                message = (
                    f"💎 *GEM HUNTER ALERT* 💎\n\n"
                    f"**Token:** *{symbol}*\n"
+                   f"**Contract:** `{token_address}`\n"
                    f"**Signal:** `{signal_type}`\n"                 
                    f"**Price:** `${current_price:.8f}`\n\n"
                    f"{holder_info_text}\n"

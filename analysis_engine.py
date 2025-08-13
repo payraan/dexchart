@@ -268,7 +268,7 @@ class AnalysisEngine:
 
     def find_market_structure_zones(self, df):
         """شناسایی Major Zones با سیستم امتیازدهی پیشرفته"""
-        if len(df) < 30:
+        if len(df) < 20:
             return []
         
         atr = self.calculate_atr(df)
@@ -647,7 +647,12 @@ class AnalysisEngine:
         # انتقال محور Y به سمت راست
         ax.yaxis.tick_right()
         ax.yaxis.set_label_position('right')
-        timeframe_label = f"{aggregate}{timeframe[0].upper()}" if aggregate != "1" else timeframe.title()
+        if timeframe == "minute":
+            timeframe_label = f"{aggregate}M"
+        elif timeframe == "hour":  
+            timeframe_label = f"{aggregate}H"
+        else:
+            timeframe_label = f"{aggregate}D"
         ax.set_title(f'{symbol} - {timeframe_label} Chart', color='white', fontsize=14)
         # Watermark در پایین سمت راست
         ax.text(0.98, 0.05, 'NarmoonAI',

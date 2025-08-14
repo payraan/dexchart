@@ -20,6 +20,11 @@ class StrategyEngine:
  
     def get_zone_state(self, token_address, zone_price):
         """دریافت وضعیت فعلی یک zone"""
+        # تبدیل numpy types به Python native
+        if hasattr(zone_price, 'item'):
+            zone_price = zone_price.item()
+        zone_price = float(zone_price)
+        
         placeholder = "%s" if db_manager.is_postgres else "?"
         query = f"""
             SELECT current_state, last_signal_time, last_price 
@@ -33,7 +38,16 @@ class StrategyEngine:
     def update_zone_state(self, token_address, zone_price, new_state, signal_type, current_price):
         """آپدیت وضعیت یک zone"""
         from datetime import datetime
-        placeholder = "%s" if db_manager.is_postgres else "?"
+        
+        # تبدیل numpy types
+        if hasattr(zone_price, 'item'):
+            zone_price = zone_price.item()
+        if hasattr(current_price, 'item'):
+            current_price = current_price.item()
+        zone_price = float(zone_price)
+        current_price = float(current_price)
+        
+        # بقیه کد...
         
         # Upsert query
         if db_manager.is_postgres:

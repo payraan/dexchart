@@ -102,18 +102,43 @@ class AnalysisEngine:
         origin_zone = self.find_origin_zone(df)
         
         # شناسایی Major Zones
-        market_zones = self.find_market_structure_zones(df)
+        market_zones = self.find_market_structure_zones(df, timeframe, aggregate)
         
         # تفکیک zones به supply و demand
         supply_zones = [z for z in market_zones if z['zone_type'] == 'resistance']
         demand_zones = [z for z in market_zones if z['zone_type'] == 'support']
             
         # Calculate fibonacci
-        fibonacci_data = self._calculate_fibonacci_levels(df)
+        fibonacci_data = self._calculate_fibonacci_levels(df, timeframe=timeframe, aggregate=aggregate)
             
         # Get current price
         current_price = df['close'].iloc[-1]
-            
+        
+        # Calculate confluence zones
+        confluence_zones = self.find_confluence_zones(supply_zones, demand_zones, fibonacci_data)
+        
+        # دسته‌بندی zones بر اساس امتیاز
+        from zone_config import TIER1_SCORE_THRESHOLD, TIER2_SCORE_THRESHOLD
+        
+        tier1_zones = []
+        tier2_zones = []
+        tier3_zones = []
+        
+        # بررسی confluence zones
+        for zone in confluence_zones:
+            if zone.get('final_score', 0) >= TIER1_SCORE_THRESHOLD:
+                tier1_zones.append(zone)
+            elif zone.get('final_score', 0) >= TIER2_SCORE_THRESHOLD:
+                tier2_zones.append(zone)
+            else:
+                tier3_zones.append(zone)
+        
+        # Origin Zone همیشه Tier 1
+        if origin_zone:
+            origin_zone['final_score'] = 10.0
+            origin_zone['is_origin'] = True
+            tier1_zones.insert(0, origin_zone)  # اول لیست
+    
         # Build analysis result
         analysis_result = {
             'metadata': {
@@ -129,8 +154,11 @@ class AnalysisEngine:
             },
             'technical_levels': {
                 'zones': {
-                    'supply': supply_zones,
-                    'demand': demand_zones,
+                    'tier1_critical': tier1_zones[:3],  # حداکثر 3
+                    'tier2_major': tier2_zones[:3],
+                    'tier3_minor': tier3_zones[:2],
+                    'supply': supply_zones,  # برای سازگاری با کد قدیمی
+                    'demand': demand_zones,  # برای سازگاری با کد قدیمی
                     'origin': origin_zone
                 },
                 'fibonacci': fibonacci_data,
@@ -266,7 +294,7 @@ class AnalysisEngine:
 
        return None
 
-    def find_market_structure_zones(self, df):
+    def find_market_structure_zones(self, df, timeframe="hour", aggregate="1"):
         """شناسایی Major Zones با سیستم امتیازدهی پیشرفته"""
         if len(df) < 20:
             return []
@@ -281,7 +309,13 @@ class AnalysisEngine:
         lows = df['low'].values
         
         # پیدا کردن نقاط برگشت مهم
-        order = 3 if len(df) < 100 else 5
+        # تنظیم order بر اساس تایم‌فریم
+        if timeframe == "minute" and int(aggregate) <= 5:
+            order = 2
+        elif timeframe == "minute" and int(aggregate) <= 15:
+            order = 3
+        else:
+            order = 3 if len(df) < 100 else 5
         high_points = argrelextrema(highs, np.greater, order=order)[0]
         low_points = argrelextrema(lows, np.less, order=order)[0]
         
@@ -368,6 +402,44 @@ class AnalysisEngine:
         # مرتب‌سازی و انتخاب بهترین zones
         filtered_zones.sort(key=lambda x: x['score'], reverse=True)
         return filtered_zones[:3]  # حداکثر 3 zone
+
+    def find_confluence_zones(self, supply_zones, demand_zones, fibonacci_data):
+        """شناسایی نواحی همگرایی بین S/R و فیبوناچی"""
+        from zone_config import CONFLUENCE_THRESHOLD, FIBONACCI_WEIGHTS
+        
+        confluence_zones = []
+        
+        if not fibonacci_data or not fibonacci_data.get('levels'):
+            return confluence_zones
+        
+        # بررسی همه zones (supply + demand)
+        all_zones = supply_zones + demand_zones
+        
+        for zone in all_zones:
+            zone_price = zone.get('level_price', 0)
+            if zone_price <= 0:
+                continue
+                
+            confluence_bonus = 0
+            matched_fibs = []
+            
+            # چک کردن با سطوح فیبوناچی کلیدی
+            for fib_level, fib_price in fibonacci_data['levels'].items():
+                if fib_level in FIBONACCI_WEIGHTS:
+                    distance = abs(zone_price - fib_price) / zone_price
+                    if distance < CONFLUENCE_THRESHOLD:
+                        confluence_bonus += FIBONACCI_WEIGHTS[fib_level]
+                        matched_fibs.append(fib_level)
+            
+            # اگر همگرایی پیدا شد
+            if confluence_bonus > 0:
+                zone['confluence_bonus'] = confluence_bonus
+                zone['final_score'] = zone.get('score', 0) + confluence_bonus
+                zone['matched_fibs'] = matched_fibs
+                zone['is_confluence'] = True
+                confluence_zones.append(zone)
+        
+        return confluence_zones
 
     def _calculate_zone_score(self, touches, reactions, volume, avg_volume, zone_type):
         """محاسبه امتیاز یک Zone بر اساس معیارهای مختلف"""
@@ -492,7 +564,7 @@ class AnalysisEngine:
     
          return supply_clusters[:3], demand_clusters[:3]
 
-    def _calculate_fibonacci_levels(self, df, lookback_period=400):
+    def _calculate_fibonacci_levels(self, df, lookback_period=400, timeframe="hour", aggregate="1"):
         """Calculate Fibonacci retracement levels (computation only)"""
         if len(df) < lookback_period:
             lookback_period = len(df)
@@ -505,7 +577,11 @@ class AnalysisEngine:
         if price_range <= 0 or pd.isna(price_range):
             return None
             
-        fib_levels = [0.0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0]
+        # برای تایم‌فریم‌های کوتاه، فقط سطوح کلیدی
+        if timeframe == "minute" and int(aggregate) < 30:
+            fib_levels = [0.0, 0.382, 0.5, 0.618, 1.0]
+        else:
+            fib_levels = [0.0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0]
         levels_dict = {}
         
         for level in fib_levels:
@@ -610,6 +686,36 @@ class AnalysisEngine:
                                     label='Origin Zone')
             ax.add_patch(rect)
         
+        # رسم Tier 1 Critical Zones (طلایی - همگرایی)
+        from zone_config import TIER1_COLOR, TIER1_ALPHA
+        tier1_zones = technical_levels['zones'].get('tier1_critical', [])
+        
+        for zone in tier1_zones:
+            if zone.get('is_origin'):
+                # Origin Zone با رنگ نارنجی
+                zone_color = ORIGIN_ZONE_COLOR
+                zone_alpha = ORIGIN_ZONE_ALPHA
+                label = 'Origin Zone'
+            else:
+                # Confluence Zones با رنگ طلایی
+                zone_color = TIER1_COLOR
+                zone_alpha = TIER1_ALPHA
+                fibs = zone.get('matched_fibs', [])
+                label = f'Critical Zone (Score: {zone.get("final_score", 0):.1f})'
+            
+            zone_price = zone.get('level_price', zone.get('zone_bottom', 0))
+            zone_height = zone_price * 0.008  # عرض بیشتر برای zones مهم
+            zone_bottom = zone_price - (zone_height / 2)
+            
+            start_num = mdates.date2num(timestamps[0])
+            end_num = mdates.date2num(chart_end_time)
+            width_num = end_num - start_num
+            
+            rect = patches.Rectangle((start_num, zone_bottom), width_num, zone_height,
+                                    facecolor=zone_color, alpha=zone_alpha,
+                                    edgecolor=zone_color, linewidth=2)
+            ax.add_patch(rect)
+
         # رسم Major Supply Zones (آبی - مقاومت)
         for zone in supply_zones:
             zone_price = zone['level_price']

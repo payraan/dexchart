@@ -6,6 +6,11 @@ from database_manager import db_manager
 from analysis_engine import AnalysisEngine
 # --- بخش جدید: ایمپورت کردن تنظیمات ---
 from config import TradingConfig 
+from zone_config import (
+    TIER1_APPROACH_THRESHOLD, TIER1_BREAKOUT_THRESHOLD,
+    TIER2_APPROACH_THRESHOLD, TIER2_BREAKOUT_THRESHOLD,
+    ZONE_STATES, SIGNAL_PRIORITY
+)
 
 class StrategyEngine:
     def __init__(self):
@@ -13,6 +18,48 @@ class StrategyEngine:
         # استفاده از لاگر به جای پرینت
         self.logger = logging.getLogger(__name__)
  
+    def get_zone_state(self, token_address, zone_price):
+        """دریافت وضعیت فعلی یک zone"""
+        placeholder = "%s" if db_manager.is_postgres else "?"
+        query = f"""
+            SELECT current_state, last_signal_time, last_price 
+            FROM zone_states 
+            WHERE token_address = {placeholder} 
+            AND ABS(zone_price - {placeholder}) / zone_price < 0.001
+        """
+        result = db_manager.fetchone(query, (token_address, zone_price))
+        return result if result else {'current_state': 'IDLE', 'last_price': 0}
+    
+    def update_zone_state(self, token_address, zone_price, new_state, signal_type, current_price):
+        """آپدیت وضعیت یک zone"""
+        from datetime import datetime
+        placeholder = "%s" if db_manager.is_postgres else "?"
+        
+        # Upsert query
+        if db_manager.is_postgres:
+            query = f"""
+                INSERT INTO zone_states 
+                (token_address, zone_price, current_state, last_signal_type, last_signal_time, last_price)
+                VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
+                ON CONFLICT (token_address, zone_price) 
+                DO UPDATE SET 
+                    current_state = EXCLUDED.current_state,
+                    last_signal_type = EXCLUDED.last_signal_type,
+                    last_signal_time = EXCLUDED.last_signal_time,
+                    last_price = EXCLUDED.last_price,
+                    updated_at = CURRENT_TIMESTAMP
+            """
+        else:
+            query = f"""
+                INSERT OR REPLACE INTO zone_states 
+                (token_address, zone_price, current_state, last_signal_type, last_signal_time, last_price)
+                VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
+            """
+        
+        params = (token_address, zone_price, new_state, signal_type, 
+                 datetime.now().isoformat(), current_price)
+        db_manager.execute(query, params)
+
     async def select_optimal_timeframe(self, pool_id):
         """
         انتخاب تایم‌فریم بهینه بر اساس عمر واقعی توکن
@@ -67,55 +114,118 @@ class StrategyEngine:
             return ("hour", "4"), None
 
     async def detect_breakout_signal(self, analysis_result, token_address):
-        """New breakout detection using pre-analyzed data"""
+        """Smart signal detection with state management"""
         if not analysis_result:
             return None
             
         metadata = analysis_result['metadata']
         symbol = metadata['symbol']
         pool_id = metadata['pool_id']
-        
-        self.logger.info(f"🔄 [L1-START] Analysing {symbol} using pre-computed data")
-            
         current_price = analysis_result['raw_data']['current_price']
-        supply_zones = analysis_result['technical_levels']['zones']['supply']
-        demand_zones = analysis_result['technical_levels']['zones']['demand']
-        origin_zone = analysis_result['technical_levels']['zones'].get('origin')
-        fibonacci_data = analysis_result['technical_levels']['fibonacci']
         
-        # بررسی Origin Zone برای توکن‌های جدید
-        if origin_zone and current_price > 0:
-            zone_bottom = origin_zone['zone_bottom']
-            zone_top = origin_zone['zone_top']
+        # دریافت zones بر اساس tier
+        zones = analysis_result['technical_levels']['zones']
+        tier1_zones = zones.get('tier1_critical', [])
+        tier2_zones = zones.get('tier2_major', [])
+        
+        # فقط Tier 1 و 2 رو بررسی کن
+        all_important_zones = []
+        
+        for zone in tier1_zones:
+            zone['tier'] = 'TIER1'
+            all_important_zones.append(zone)
             
-            # اگر قیمت به Origin Zone برگشته
-            if zone_bottom <= current_price <= zone_top * 1.1:
-                self.logger.info(f"💎 {symbol}: Testing Origin Zone at ${current_price:.6f}")
-                signal = {
-                    'signal_type': 'ORIGIN_RETEST',
-                    'token_address': token_address,
-                    'pool_id': pool_id,
-                    'symbol': symbol,
-                    'current_price': current_price,
-                    'zone_score': 10.0,  # Origin Zone همیشه امتیاز بالا
-                    'final_score': 10.0,
-                    'support_level': zone_bottom,
-                    'timestamp': datetime.now().isoformat()
-                }
-                signal['analysis_result'] = analysis_result
-                return signal
+        for zone in tier2_zones:
+            zone['tier'] = 'TIER2'
+            all_important_zones.append(zone)
+        
+        # بررسی هر zone
+        for zone in all_important_zones:
+            signal = await self._check_zone_signal(
+                zone, current_price, token_address, pool_id, symbol, analysis_result
+            )
+            if signal:
+                return signal  # اولین سیگنال معتبر رو برگردون
+        
+        return None
 
-        signal = self._check_confluence_signals(
-            current_price, supply_zones, demand_zones, fibonacci_data,
-            token_address, pool_id, symbol
+    async def _check_zone_signal(self, zone, current_price, token_address, pool_id, symbol, analysis_result):
+        """Check if a zone should generate a signal based on state"""
+        from zone_config import (
+            TIER1_APPROACH_THRESHOLD, TIER1_BREAKOUT_THRESHOLD,
+            TIER2_APPROACH_THRESHOLD, TIER2_BREAKOUT_THRESHOLD
         )
         
-        if signal:
-            signal['analysis_result'] = analysis_result
-            self.logger.info(f"🚀✅ [L1-SUCCESS] Signal found for {symbol}!")
-            return signal
+        # تعیین zone price
+        zone_price = zone.get('level_price', zone.get('zone_bottom', 0))
+        if zone_price <= 0:
+            return None
             
-        self.logger.info(f"🔵 [L1-INFO] No signal found for {symbol}")
+        # تعیین thresholds بر اساس tier
+        if zone['tier'] == 'TIER1':
+            approach_threshold = TIER1_APPROACH_THRESHOLD
+            breakout_threshold = TIER1_BREAKOUT_THRESHOLD
+        else:
+            approach_threshold = TIER2_APPROACH_THRESHOLD
+            breakout_threshold = TIER2_BREAKOUT_THRESHOLD
+        
+        # محاسبه فاصله
+        distance = (current_price - zone_price) / zone_price
+        abs_distance = abs(distance)
+        
+        # دریافت state قبلی
+        state_info = self.get_zone_state(token_address, zone_price)
+        current_state = state_info.get('current_state', 'IDLE')
+        last_price = state_info.get('last_price', 0)
+        
+        new_state = current_state
+        signal_type = None
+        
+        # تشخیص وضعیت جدید
+        if distance > breakout_threshold and distance < 0.05:
+            # قیمت بالای zone (شکست رو به بالا)
+            if current_state != 'BROKEN_UP':
+                new_state = 'BROKEN_UP'
+                signal_type = 'resistance_breakout'
+                
+        elif distance < -breakout_threshold and distance > -0.05:
+            # قیمت پایین zone (شکست رو به پایین)
+            if current_state != 'BROKEN_DOWN':
+                new_state = 'BROKEN_DOWN'
+                signal_type = 'support_breakdown'
+                
+        elif abs_distance < approach_threshold:
+            # نزدیک به zone
+            if distance > 0 and current_state not in ['APPROACHING_DOWN', 'TESTING']:
+                new_state = 'APPROACHING_DOWN'
+                signal_type = 'approaching_support'
+            elif distance < 0 and current_state not in ['APPROACHING_UP', 'TESTING']:
+                new_state = 'APPROACHING_UP'
+                signal_type = 'approaching_resistance'
+                
+        elif abs_distance > 0.05:
+            # دور از zone - reset state
+            if current_state != 'IDLE':
+                new_state = 'IDLE'
+        
+        # اگر state تغییر کرد و باید سیگنال بده
+        if new_state != current_state and signal_type:
+            self.update_zone_state(token_address, zone_price, new_state, signal_type, current_price)
+            
+            return {
+                'signal_type': signal_type,
+                'token_address': token_address,
+                'pool_id': pool_id,
+                'symbol': symbol,
+                'current_price': current_price,
+                'zone_price': zone_price,
+                'zone_tier': zone['tier'],
+                'zone_score': zone.get('final_score', zone.get('score', 0)),
+                'distance_percent': abs_distance * 100,
+                'analysis_result': analysis_result,
+                'timestamp': datetime.now().isoformat()
+            }
+        
         return None
 
     def _check_confluence_signals(self, current_price, supply_zones, demand_zones,

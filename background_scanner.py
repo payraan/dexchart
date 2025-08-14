@@ -29,6 +29,10 @@ class BackgroundScanner:
        """یک هشدار سیگنال را بر اساس نوع آن به تلگرام ارسال می‌کند."""
        try:
            signal_type = signal.get('signal_type', '')
+           zone_tier = signal.get('zone_tier', '')
+           zone_price = signal.get('zone_price', 0)
+           distance_pct = signal.get('distance_percent', 0)
+           zone_score = signal.get('zone_score', 0)
            symbol = signal.get('symbol', 'N/A')
            token_address = signal.get('token_address')
            analysis_result = signal.get('analysis_result')
@@ -88,6 +92,39 @@ class BackgroundScanner:
                    f"**Distance:** `{((current_price - support_level) / support_level * 100):+.1f}%`\n\n"
                    f"Time: `{signal.get('timestamp', '')}`"
                )
+           
+           elif 'approaching' in signal_type:
+               if 'resistance' in signal_type:
+                   emoji = "🔔"
+                   action = "APPROACHING RESISTANCE"
+               else:
+                   emoji = "📉"
+                   action = "APPROACHING SUPPORT"
+               
+               message = (
+                   f"{emoji} *{action}*\n"
+                   f"━━━━━━━━━━━━━━━\n"
+                   f"**Token:** *{symbol}*\n"
+                   f"**Zone:** {zone_tier} (Score: {zone_score:.1f})\n"
+                   f"**Zone Level:** `${zone_price:.8f}`\n"
+                   f"**Current:** `${current_price:.8f}`\n"
+                   f"**Distance:** `{distance_pct:.1f}%`\n"
+                   f"{holder_info_text}\n"
+                   f"Time: `{signal.get('timestamp', '')}`"
+               )
+           elif 'breakdown' in signal_type:
+               message = (
+                   f"⚠️ *SUPPORT BREAKDOWN*\n"
+                   f"━━━━━━━━━━━━━━━\n"
+                   f"**Token:** *{symbol}*\n"
+                   f"**Broken:** {zone_tier} Support\n"
+                   f"**Level:** `${zone_price:.8f}`\n"
+                   f"**Current:** `${current_price:.8f}`\n"
+                   f"**Drop:** `{distance_pct:.1f}%`\n"
+                   f"{holder_info_text}\n"
+                   f"Time: `{signal.get('timestamp', '')}`"
+               )
+
            elif 'breakout' in signal_type or 'resistance' in signal_type:
                broken_level = signal.get('level_broken', 0)
                message = (

@@ -138,7 +138,57 @@ class AnalysisEngine:
             origin_zone['final_score'] = 10.0
             origin_zone['is_origin'] = True
             tier1_zones.insert(0, origin_zone)  # اول لیست
-    
+     
+        # برای توکن‌های جدید (کمتر از 48 ساعت)، zones ضعیف رو هم قبول کن
+        if 'timestamp' in df.columns and len(df) > 0:
+            token_age_hours = (df['timestamp'].iloc[-1] - df['timestamp'].iloc[0]) / 3600
+            
+            if token_age_hours < 48:  # توکن جدید
+                from zone_config import FIBONACCI_WEIGHTS
+                
+                # آستانه بیشتر برای توکن‌های جدید (10% بجای 5%)
+                NEW_TOKEN_CONFLUENCE_THRESHOLD = 0.10
+                
+                # همه zones با امتیاز بالای 1 رو بررسی کن
+                for zone in supply_zones + demand_zones:
+                    if zone.get('score', 0) >= 1.0:
+                        zone_price = zone.get('level_price', 0)
+                        
+                        # چک کن با فیبوناچی confluence داره یا نه
+                        matched_fibs = []
+                        confluence_bonus = 0
+                        
+                        if fibonacci_data and fibonacci_data.get('levels'):
+                            for fib_level, fib_price in fibonacci_data['levels'].items():
+                                if fib_level in FIBONACCI_WEIGHTS:
+                                    distance = abs(zone_price - fib_price) / zone_price if zone_price > 0 else 1
+                                    
+                                    # استفاده از threshold بیشتر برای توکن‌های جدید
+                                    if distance < NEW_TOKEN_CONFLUENCE_THRESHOLD:
+                                        matched_fibs.append(fib_level)
+                                        confluence_bonus += FIBONACCI_WEIGHTS[fib_level]
+                        
+                        # ذخیره اطلاعات confluence
+                        zone['matched_fibs'] = matched_fibs
+                        zone['is_confluence'] = len(matched_fibs) > 0
+                        zone['confluence_bonus'] = confluence_bonus
+                        
+                        # محاسبه امتیاز نهایی
+                        final_score = zone.get('score', 0) + confluence_bonus
+                        zone['final_score'] = final_score
+                        
+                        # اگر در confluence_zones نیست
+                        if zone not in confluence_zones:
+                            zone['is_new_token_zone'] = True
+                            
+                            # دسته‌بندی بر اساس امتیاز نهایی یا وجود confluence
+                            if final_score >= 3.0 or len(matched_fibs) > 0:
+                                tier2_zones.append(zone)
+                            elif zone.get('score', 0) >= 1.5:
+                                tier3_zones.append(zone)
+                
+                print(f"🆕 New token ({token_age_hours:.1f}h) - Added {len(tier2_zones)} Tier2, {len(tier3_zones)} Tier3 zones")
+
         # Build analysis result
         analysis_result = {
             'metadata': {
@@ -595,18 +645,31 @@ class AnalysisEngine:
             'price_range': price_range
         }
 
-    def draw_fibonacci_levels(self, ax, fib_data):
+    def draw_fibonacci_levels(self, ax, fib_data, technical_levels=None):
         """Draw Fibonacci retracement levels based on pre-calculated data"""
         if not fib_data:
             return
-
+        
         levels = fib_data['levels']
         fib_colors = ['#e74c3c', '#ff9ff3', '#54a0ff', '#5f27cd', '#00d2d3', '#ff9f43', '#2ecc71']
         
+        # لیست فیبوناچی‌هایی که در zones هستن
+        fibs_in_zones = []
+        if technical_levels:
+            all_zones = (technical_levels.get('zones', {}).get('tier1_critical', []) + 
+                        technical_levels.get('zones', {}).get('tier2_major', []))
+            for zone in all_zones:
+                matched = zone.get('matched_fibs', [])
+                fibs_in_zones.extend(matched)
+        
         for i, (level_key, level_price) in enumerate(levels.items()):
+            # اگر این فیبوناچی در zone هست، رسمش نکن
+            if level_key in fibs_in_zones:
+                continue
+                
             ax.axhline(y=level_price, color=fib_colors[i], linestyle='--',
                        linewidth=1, alpha=0.7)
-            
+        
             ax.text(0.02, level_price, f'Fib {level_key:.3f}: ${level_price:.6f}',
                    transform=ax.get_yaxis_transform(),
                    verticalalignment='center', fontsize=9,
@@ -751,6 +814,46 @@ class AnalysisEngine:
                                     facecolor=MAJOR_ZONE_COLOR, alpha=MAJOR_ZONE_ALPHA,
                                     edgecolor=MAJOR_ZONE_COLOR, linewidth=1.5)
             ax.add_patch(rect)
+
+        # رسم Tier 2 Major Zones (بنفش - ترکیب حمایت/مقاومت با فیبوناچی)
+        tier2_zones = technical_levels['zones'].get('tier2_major', [])
+        
+        for zone in tier2_zones:
+            zone_price = zone.get('level_price', 0)
+            if zone_price <= 0:
+                continue
+            
+            # اگر با فیبوناچی همخوانی داره، zone رو بزرگتر کن
+            matched_fibs = zone.get('matched_fibs', [])
+            if matched_fibs:
+                # پیدا کردن نزدیکترین فیبوناچی
+                fib_levels = technical_levels.get('fibonacci', {}).get('levels', {})
+                fib_prices = [fib_levels.get(f, zone_price) for f in matched_fibs if f in fib_levels]
+                
+                if fib_prices:
+                    # محدوده zone از پایین‌ترین تا بالاترین
+                    all_prices = [zone_price] + fib_prices
+                    zone_bottom = min(all_prices) * 0.995  # 0.5% پایین‌تر
+                    zone_top = max(all_prices) * 1.005     # 0.5% بالاتر
+                    zone_height = zone_top - zone_bottom
+                else:
+                    zone_height = zone_price * 0.01
+                    zone_bottom = zone_price - (zone_height / 2)
+            else:
+                # zone معمولی بدون confluence
+                zone_height = zone_price * 0.008
+                zone_bottom = zone_price - (zone_height / 2)
+            
+            start_num = mdates.date2num(timestamps[0])
+            end_num = mdates.date2num(chart_end_time)
+            width_num = end_num - start_num
+            
+            # بنفش برای confluence zones
+            rect = patches.Rectangle((start_num, zone_bottom), width_num, zone_height,
+                                    facecolor='#9370DB', alpha=0.35,
+                                    edgecolor='#9370DB', linewidth=2,
+                                    linestyle='-')
+            ax.add_patch(rect)
        
         ax.grid(True, alpha=0.3, color='#333333')
         # انتقال محور Y به سمت راست
@@ -778,7 +881,7 @@ class AnalysisEngine:
        
         ax.set_xlim(timestamps[0], chart_end_time)
        
-        self.draw_fibonacci_levels(ax, technical_levels['fibonacci'])
+        self.draw_fibonacci_levels(ax, technical_levels['fibonacci'], technical_levels)
        
         img_buffer = io.BytesIO()
         plt.savefig(img_buffer, format='png', facecolor='#1a1a1a', dpi=200, bbox_inches='tight')

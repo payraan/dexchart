@@ -24,7 +24,7 @@ MAJOR_ZONE_COLOR = '#007AFF'  # آبی iOS
 MAJOR_ZONE_ALPHA = 0.25
 
 # Confluence Detection Settings
-CONFLUENCE_THRESHOLD = 0.035  # 1.5% tolerance
+CONFLUENCE_THRESHOLD = 0.05  # 1.5% tolerance
 FIBONACCI_WEIGHTS = {
     0.618: 2.5,  # Golden Ratio
     0.382: 2.0,
@@ -34,7 +34,7 @@ FIBONACCI_WEIGHTS = {
 }
 
 # Zone Tier Thresholds
-TIER1_SCORE_THRESHOLD = 7.0
+TIER1_SCORE_THRESHOLD = 6.0
 TIER2_SCORE_THRESHOLD = 3.0
 
 # Zone Colors

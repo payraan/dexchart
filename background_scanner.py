@@ -312,6 +312,7 @@ class BackgroundScanner:
                             signal = await self.strategy_engine.detect_breakout_signal(analysis_result, token['address'])
                 
                 if signal:
+                    self.logger.info(f"📍 Signal detected - Type: {signal.get('signal_type')}, Symbol: {signal.get('symbol')}, Tier: {signal.get('zone_tier', 'N/A')}")
                     is_recent = await self.strategy_engine.has_recent_alert(signal)
                     if not is_recent:
                         signals_found += 1

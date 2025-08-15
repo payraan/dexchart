@@ -47,7 +47,7 @@ class StrategyEngine:
         zone_price = float(zone_price)
         current_price = float(current_price)
         
-        # بقیه کد...
+        placeholder = "%s" if db_manager.is_postgres else "?"  # این خط مهمه!
         
         # Upsert query
         if db_manager.is_postgres:

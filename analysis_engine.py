@@ -110,6 +110,7 @@ class AnalysisEngine:
             
         # Calculate fibonacci
         fibonacci_data = self._calculate_fibonacci_levels(df, timeframe=timeframe, aggregate=aggregate)
+        fibonacci_extensions = self._calculate_fibonacci_extensions(df)
             
         # Get current price
         current_price = df['close'].iloc[-1]
@@ -212,6 +213,7 @@ class AnalysisEngine:
                     'origin': origin_zone
                 },
                 'fibonacci': fibonacci_data,
+                'fibonacci_extensions': fibonacci_extensions,
                 'moving_averages': {
                     'ema_50': df['ema_50'].iloc[-1] if 'ema_50' in df.columns and not pd.isna(df['ema_50'].iloc[-1]) else None,
                     'ema_200': df['ema_200'].iloc[-1] if 'ema_200' in df.columns and not pd.isna(df['ema_200'].iloc[-1]) else None
@@ -676,6 +678,54 @@ class AnalysisEngine:
                    color=fib_colors[i], alpha=0.8,
                    bbox=dict(boxstyle='round,pad=0.3', facecolor='black', alpha=0.7))
 
+    def _calculate_fibonacci_extensions(self, df, lookback_period=400):
+        """Calculate Fibonacci extension levels for upward targets."""
+        if len(df) < lookback_period:
+            lookback_period = len(df)
+        
+        recent_df = df.iloc[-lookback_period:]
+        high_point = recent_df['high'].max()
+        low_point = recent_df['low'].min()
+        price_range = high_point - low_point
+        
+        if price_range <= 0 or pd.isna(price_range):
+            return None
+            
+        # Standard extension levels
+        ext_levels = [1.272, 1.618, 2.0, 2.618]
+        levels_dict = {}
+        
+        for level in ext_levels:
+            # Formula for calculating price targets ABOVE the high point
+            level_price = high_point + (price_range * (level - 1.0))
+            levels_dict[level] = level_price
+            
+        return {
+            'levels': levels_dict,
+            'high_point': high_point,
+            'low_point': low_point
+        }
+
+    def draw_fibonacci_extensions(self, ax, fib_ext_data):
+        """Draw Fibonacci extension levels on the chart."""
+        if not fib_ext_data or not fib_ext_data.get('levels'):
+            return
+
+        levels = fib_ext_data['levels']
+        # Different colors for extensions (green shades for targets)
+        ext_colors = ['#4caf50', '#8bc34a', '#cddc39', '#ffeb3b'] 
+        
+        for i, (level_key, level_price) in enumerate(levels.items()):
+            if i < len(ext_colors):
+                ax.axhline(y=level_price, color=ext_colors[i], linestyle=':', 
+                           linewidth=1.2, alpha=0.9)
+                
+                ax.text(0.02, level_price, f'Target {level_key:.3f}: ${level_price:.6f}',
+                       transform=ax.get_yaxis_transform(),
+                       verticalalignment='center', fontsize=9,
+                       color=ext_colors[i], alpha=0.9,
+                       bbox=dict(boxstyle='round,pad=0.3', facecolor='black', alpha=0.7))  
+
     async def create_chart(self, analysis_result):
         """Create candlestick chart from pre-analyzed data"""
         if not analysis_result:
@@ -882,7 +932,8 @@ class AnalysisEngine:
         ax.set_xlim(timestamps[0], chart_end_time)
        
         self.draw_fibonacci_levels(ax, technical_levels['fibonacci'], technical_levels)
-       
+        self.draw_fibonacci_extensions(ax, technical_levels.get('fibonacci_extensions'))
+
         img_buffer = io.BytesIO()
         plt.savefig(img_buffer, format='png', facecolor='#1a1a1a', dpi=200, bbox_inches='tight')
         img_buffer.seek(0)

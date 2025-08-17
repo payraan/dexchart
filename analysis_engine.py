@@ -111,6 +111,7 @@ class AnalysisEngine:
         # Calculate fibonacci
         fibonacci_data = self._calculate_fibonacci_levels(df, timeframe=timeframe, aggregate=aggregate)
         fibonacci_extensions = self._calculate_fibonacci_extensions(df)
+        trendline_data = self.detect_downtrend_line(df)
             
         # Get current price
         current_price = df['close'].iloc[-1]
@@ -214,6 +215,7 @@ class AnalysisEngine:
                 },
                 'fibonacci': fibonacci_data,
                 'fibonacci_extensions': fibonacci_extensions,
+                'trendline': trendline_data,
                 'moving_averages': {
                     'ema_50': df['ema_50'].iloc[-1] if 'ema_50' in df.columns and not pd.isna(df['ema_50'].iloc[-1]) else None,
                     'ema_200': df['ema_200'].iloc[-1] if 'ema_200' in df.columns and not pd.isna(df['ema_200'].iloc[-1]) else None
@@ -705,6 +707,127 @@ class AnalysisEngine:
             'high_point': high_point,
             'low_point': low_point
         }
+    
+    def detect_downtrend_line(self, df, min_touches=2, lookback=300, tolerance=0.005):
+        """
+        Focus on RECENT price action for relevant trendlines
+        """
+        from scipy.signal import argrelextrema
+        import numpy as np
+        
+        if len(df) < 50:
+            return None
+        
+        # Focus on recent data (last 100-150 candles for better relevance)
+        recent_window = min(150, len(df))
+        df_analysis = df.iloc[-recent_window:].reset_index(drop=True)
+        
+        highs = df_analysis['high'].values
+        
+        # Find swing highs
+        order = 4  # Smaller order to catch more recent swings
+        high_indices = argrelextrema(highs, np.greater, order=order)[0]
+        
+        if len(high_indices) < 2:
+            return None
+        
+        # Focus on RECENT highs (last 60% of the window)
+        recent_threshold = len(highs) * 0.4
+        recent_highs = [idx for idx in high_indices if idx > recent_threshold]
+        
+        # If not enough recent highs, include some older ones
+        if len(recent_highs) < 2:
+            recent_highs = high_indices[-min(4, len(high_indices)):]  # Last 4 highs
+        
+        if len(recent_highs) < 2:
+            return None
+        
+        # Find the highest point among recent highs
+        recent_peak_idx = max(recent_highs, key=lambda x: highs[x])
+        recent_peak_price = highs[recent_peak_idx]
+        
+        # Check if we're in a downtrend from this peak
+        current_price = highs[-1]
+        # شرط شل‌تر: فقط کافی است قیمت از peak پایین‌تر باشد
+        if current_price >= recent_peak_price:  # Only skip if at or above peak
+            return None
+        
+        best_line = None
+        best_score = 0
+        
+        # Try to connect recent highs
+        for i in range(len(recent_highs)):
+            for j in range(i + 1, len(recent_highs)):
+                p1_idx = recent_highs[i]
+                p2_idx = recent_highs[j]
+                
+                # Ensure we include the recent peak
+                #if recent_peak_idx not in [p1_idx, p2_idx]:
+                #    continue
+                
+                p1_price = highs[p1_idx]
+                p2_price = highs[p2_idx]
+                
+                # Skip if too close
+                if abs(p2_idx - p1_idx) < 8:
+                    continue
+                
+                # Calculate slope
+                slope = (p2_price - p1_price) / (p2_idx - p1_idx)
+                
+                # Only downward or horizontal slopes
+                if slope > 0.0001:
+                    continue
+                
+                intercept = p1_price - slope * p1_idx
+                
+                # Validate
+                is_valid = True
+                for k in range(min(p1_idx, p2_idx) + 1, max(p1_idx, p2_idx)):
+                    predicted = slope * k + intercept
+                    if highs[k] > predicted * (1 + tolerance):
+                        is_valid = False
+                        break
+                
+                if not is_valid:
+                    continue
+                
+                # Count touches
+                touches = 0
+                for k in range(len(highs)):
+                    predicted = slope * k + intercept
+                    if abs(highs[k] - predicted) / predicted < tolerance:
+                        touches += 1
+                
+                # Scoring
+                score = touches * 3
+                
+                # Big bonus for including the recent peak
+                if recent_peak_idx in [p1_idx, p2_idx]:
+                    score += 25
+                
+                # Bonus for recency (prefer newer lines)
+                avg_idx = (p1_idx + p2_idx) / 2
+                recency_bonus = (avg_idx / len(highs)) * 10  # 0-10 points
+                score += recency_bonus
+                
+                # Length bonus
+                score += (abs(p2_idx - p1_idx)) * 0.1
+                
+                if score > best_score and touches >= min_touches:
+                    best_score = score
+                    best_line = {
+                        'start_point': (df_analysis['timestamp'].iloc[p1_idx], p1_price),
+                        'end_point': (df_analysis['timestamp'].iloc[p2_idx], p2_price),
+                        'slope': slope,
+                        'intercept': intercept,
+                        'touches': touches,
+                        'confidence_score': score,
+                        'start_idx': p1_idx,
+                        'end_idx': p2_idx
+                    }
+        
+        return best_line
 
     def draw_fibonacci_extensions(self, ax, fib_ext_data):
         """Draw Fibonacci extension levels on the chart."""
@@ -725,6 +848,47 @@ class AnalysisEngine:
                        verticalalignment='center', fontsize=9,
                        color=ext_colors[i], alpha=0.9,
                        bbox=dict(boxstyle='round,pad=0.3', facecolor='black', alpha=0.7))  
+
+    def draw_trendline(self, ax, trendline_data, timestamps):
+        """Draw trendline on the chart"""
+        if not trendline_data:
+            return
+            
+        # Extract line data
+        start_idx = trendline_data['start_idx']
+        end_idx = trendline_data['end_idx']
+        slope = trendline_data['slope']
+        intercept = trendline_data['intercept']
+        
+        # Calculate price at each index
+        start_price = slope * start_idx + intercept
+        end_price = slope * end_idx + intercept
+        
+        # Extend line a bit beyond the last point (not too much!)
+        extended_idx = min(end_idx + 20, len(timestamps) - 1)  # Max 20 candles extension
+        extended_price = slope * extended_idx + intercept
+        
+        # Make sure extended price is reasonable (not negative or too high)
+        current_price = start_price  # Use a reference price
+        if extended_price < 0:
+            extended_price = current_price * 0.1
+        if extended_price > current_price * 10:
+            extended_price = current_price * 2
+            
+        # Use actual timestamps for x-axis
+        if start_idx < len(timestamps) and end_idx < len(timestamps):
+            start_dt = timestamps[start_idx]
+            end_dt = timestamps[end_idx]
+            extended_dt = timestamps[min(extended_idx, len(timestamps)-1)]
+            
+            # Draw the trendline
+            ax.plot([start_dt, extended_dt], [start_price, extended_price],
+                    color='#FF9500', linewidth=2, alpha=0.8,
+                    linestyle='-', label=f'Downtrend (Touches: {trendline_data["touches"]})')
+            
+            # Mark touch points with small circles
+            ax.plot([start_dt, end_dt], [start_price, end_price], 
+                    'o', color='#FF9500', markersize=4, alpha=0.9)
 
     async def create_chart(self, analysis_result):
         """Create candlestick chart from pre-analyzed data"""
@@ -933,6 +1097,9 @@ class AnalysisEngine:
        
         self.draw_fibonacci_levels(ax, technical_levels['fibonacci'], technical_levels)
         self.draw_fibonacci_extensions(ax, technical_levels.get('fibonacci_extensions'))
+        # Draw trendline if exists
+        if technical_levels.get('trendline'):
+            self.draw_trendline(ax, technical_levels['trendline'], timestamps)
 
         img_buffer = io.BytesIO()
         plt.savefig(img_buffer, format='png', facecolor='#1a1a1a', dpi=200, bbox_inches='tight')

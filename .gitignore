@@ -35,3 +35,7 @@ bot.log
 
 # Scripts (optional)
 scripts/migrate_db.py
+test_*.py
+debug_*.py
+Token*.png
+*.png

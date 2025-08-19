@@ -110,4 +110,27 @@ class DatabaseManager:
         # <<< این خط باید اینجا باشد
         return self.execute(query, params)
 
+    def ensure_fibonacci_table(self):
+        """Ensure fibonacci_state table exists"""
+        try:
+            self.execute('''
+                CREATE TABLE IF NOT EXISTS fibonacci_state (
+                    id SERIAL PRIMARY KEY,
+                    token_address TEXT NOT NULL,
+                    timeframe TEXT NOT NULL,
+                    high_point DOUBLE PRECISION NOT NULL,
+                    low_point DOUBLE PRECISION NOT NULL,
+                    target1_price DOUBLE PRECISION,
+                    target2_price DOUBLE PRECISION,
+                    status TEXT NOT NULL DEFAULT 'ACTIVE',
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(token_address, timeframe)
+                );
+            ''')
+            print("✅ fibonacci_state table ensured")
+        except Exception as e:
+            print(f"❌ Error creating fibonacci_state table: {e}")
+
 db_manager = DatabaseManager()
+db_manager.ensure_fibonacci_table()

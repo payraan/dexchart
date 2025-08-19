@@ -72,4 +72,42 @@ class DatabaseManager:
             return cursor.rowcount
 
 # یک نمونه از کلاس می‌سازیم تا در همه جا از همین یک نمونه استفاده شود
+
+
+    def get_fibo_state(self, token_address, timeframe):
+        """Get fibonacci state for a token"""
+        placeholder = "%s" if self.is_postgres else "?"
+        query = f"SELECT * FROM fibonacci_state WHERE token_address = {placeholder} AND timeframe = {placeholder}"
+        return self.fetchone(query, (token_address, timeframe))
+
+    def upsert_fibo_state(self, state_data):
+        """Insert or update fibonacci state"""
+        if self.is_postgres:
+            query = """
+                INSERT INTO fibonacci_state (token_address, timeframe, high_point, low_point, target1_price, target2_price, status, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                ON CONFLICT (token_address, timeframe) DO UPDATE SET
+                    high_point = EXCLUDED.high_point,
+                    low_point = EXCLUDED.low_point,
+                    target1_price = EXCLUDED.target1_price,
+                    target2_price = EXCLUDED.target2_price,
+                    status = EXCLUDED.status,
+                    updated_at = CURRENT_TIMESTAMP
+            """
+            params = (state_data['token_address'], state_data['timeframe'],
+                      state_data['high_point'], state_data['low_point'],
+                      state_data['target1_price'], state_data['target2_price'],
+                      state_data['status'])
+        else:
+            query = """
+                INSERT OR REPLACE INTO fibonacci_state (token_address, timeframe, high_point, low_point, target1_price, target2_price, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """
+            params = (state_data['token_address'], state_data['timeframe'],
+                     state_data['high_point'], state_data['low_point'],
+                     state_data['target1_price'], state_data['target2_price'],
+                     state_data['status'])
+        # <<< این خط باید اینجا باشد
+        return self.execute(query, params)
+
 db_manager = DatabaseManager()

@@ -31,7 +31,7 @@ class AnalysisEngine:
             
         return datetime.now() - cached_time < timedelta(seconds=self.cache_duration)
 
-    async def perform_full_analysis(self, pool_id, timeframe="hour", aggregate="1", symbol=""):
+    async def perform_full_analysis(self, pool_id, token_address, timeframe="hour", aggregate="1", symbol=""):
         """Main analysis function - Single Source of Truth"""
         from datetime import datetime
         
@@ -43,7 +43,7 @@ class AnalysisEngine:
             return self.analysis_cache[cache_key]['result']
         
         # Perform full analysis
-        analysis_result = await self._do_full_analysis(pool_id, timeframe, aggregate, symbol)
+        analysis_result = await self._do_full_analysis(pool_id, token_address, timeframe, aggregate, symbol)
         
         if analysis_result and self._validate_analysis_result(analysis_result):
             # Cache the result
@@ -71,7 +71,7 @@ class AnalysisEngine:
             
         return True
 
-    async def _do_full_analysis(self, pool_id, timeframe, aggregate, symbol):
+    async def _do_full_analysis(self, pool_id, token_address, timeframe, aggregate, symbol):
         """Core analysis logic - computes all technical data"""
         from datetime import datetime
         
@@ -109,9 +109,12 @@ class AnalysisEngine:
         demand_zones = [z for z in market_zones if z['zone_type'] == 'support']
             
         # Calculate fibonacci
-        fibonacci_data = self._calculate_fibonacci_levels(df, timeframe=timeframe, aggregate=aggregate)
-        fibonacci_extensions = self._calculate_fibonacci_extensions(df)
-        trendline_data = self.detect_downtrend_line(df)
+        # --- Start of New Smart Fibonacci System ---
+        fibo_state = await self._get_or_create_fibonacci_state(df, token_address, timeframe, aggregate)
+        fibonacci_data = self._calculate_fibonacci_from_state(fibo_state)
+        fibonacci_extensions = self._calculate_extensions_from_state(fibo_state)
+        # --- End of New Smart Fibonacci System ---
+        trendline_data = None
             
         # Get current price
         current_price = df['close'].iloc[-1]
@@ -215,7 +218,7 @@ class AnalysisEngine:
                 },
                 'fibonacci': fibonacci_data,
                 'fibonacci_extensions': fibonacci_extensions,
-                'trendline': trendline_data,
+                # 'trendline': trendline_data,
                 'moving_averages': {
                     'ema_50': df['ema_50'].iloc[-1] if 'ema_50' in df.columns and not pd.isna(df['ema_50'].iloc[-1]) else None,
                     'ema_200': df['ema_200'].iloc[-1] if 'ema_200' in df.columns and not pd.isna(df['ema_200'].iloc[-1]) else None
@@ -225,6 +228,55 @@ class AnalysisEngine:
         }
             
         return analysis_result
+
+    async def _get_or_create_fibonacci_state(self, df, token_address, timeframe, aggregate):
+        """Smart fibonacci state management"""
+        from database_manager import db_manager
+        
+        timeframe_str = f"{timeframe}_{aggregate}"
+        current_price = df['close'].iloc[-1]
+        
+        # Get existing state
+        fibo_state = db_manager.get_fibo_state(token_address, timeframe_str)
+        
+        if fibo_state and fibo_state['status'] in ['ACTIVE', 'TARGET_1_HIT']:
+            # Check invalidation
+            if current_price < fibo_state['low_point'] * 0.97:
+                fibo_state['status'] = 'INVALIDATED'
+                db_manager.upsert_fibo_state(fibo_state)
+                fibo_state = None
+            else:
+                # Check target hits
+                if fibo_state['status'] == 'ACTIVE' and current_price > fibo_state['target1_price']:
+                    fibo_state['status'] = 'TARGET_1_HIT'
+                    db_manager.upsert_fibo_state(fibo_state)
+                elif fibo_state['status'] == 'TARGET_1_HIT' and current_price > fibo_state['target2_price']:
+                    fibo_state['status'] = 'COMPLETED'
+                    db_manager.upsert_fibo_state(fibo_state)
+                    fibo_state = None
+        
+        # Create new state if needed
+        if not fibo_state or fibo_state['status'] in ['INVALIDATED', 'COMPLETED']:
+            high_point = df['high'].max()
+            low_point = df['low'].min()
+            price_range = high_point - low_point
+            
+            if price_range <= 0:
+                return None
+                
+            new_state = {
+                'token_address': token_address,
+                'timeframe': timeframe_str,
+                'high_point': high_point,
+                'low_point': low_point,
+                'target1_price': high_point + (price_range * 0.272),
+                'target2_price': high_point + (price_range * 0.618),
+                'status': 'ACTIVE'
+            }
+            db_manager.upsert_fibo_state(new_state)
+            return new_state
+            
+        return fibo_state
 
     def calculate_rsi(self, prices, period=14):
         """Calculate RSI indicator"""
@@ -1125,8 +1177,8 @@ class AnalysisEngine:
         self.draw_fibonacci_levels(ax, technical_levels['fibonacci'], technical_levels)
         self.draw_fibonacci_extensions(ax, technical_levels.get('fibonacci_extensions'))
         # Draw trendline if exists
-        if technical_levels.get('trendline'):
-            self.draw_trendline(ax, technical_levels['trendline'], timestamps)
+        # if technical_levels.get('trendline'):
+        #     self.draw_trendline(ax, technical_levels['trendline'], timestamps)
 
         img_buffer = io.BytesIO()
         plt.savefig(img_buffer, format='png', facecolor='#1a1a1a', dpi=200, bbox_inches='tight')
@@ -1134,3 +1186,39 @@ class AnalysisEngine:
         plt.close()
     
         return img_buffer
+
+    def _calculate_fibonacci_from_state(self, fibo_state):
+        """Calculate fibonacci retracement levels from saved state"""
+        if not fibo_state: 
+            return None
+
+        high_point = fibo_state['high_point']
+        low_point = fibo_state['low_point']
+        price_range = high_point - low_point
+
+        if price_range <= 0: 
+            return None
+
+        fib_levels = [0.0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0]
+        levels_dict = {level: high_point - (price_range * level) for level in fib_levels}
+
+        return {
+            'levels': levels_dict, 
+            'high_point': high_point, 
+            'low_point': low_point,
+            'price_range': price_range
+        }
+
+    def _calculate_extensions_from_state(self, fibo_state):
+        """Calculate fibonacci extension levels from saved state"""
+        if not fibo_state: 
+            return None
+
+        return {
+            'levels': {
+                1.272: fibo_state['target1_price'],
+                1.618: fibo_state['target2_price']
+            },
+            'high_point': fibo_state['high_point'],
+            'low_point': fibo_state['low_point']
+        }

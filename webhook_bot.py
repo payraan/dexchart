@@ -185,7 +185,7 @@ async def chart_button_callback(update: Update, context: ContextTypes.DEFAULT_TY
                     # تحلیل و ساخت چارت
                     print(f"🔄 DEBUG: Starting analysis for {symbol}...")
                     analysis_result = await analysis_engine.perform_full_analysis(
-                        pool_id, timeframe, aggregate, symbol
+                        pool_id, token_address, timeframe, aggregate, symbol
                     )
                     
                     print(f"🔍 DEBUG: Analysis result exists: {analysis_result is not None}")

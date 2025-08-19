@@ -450,7 +450,7 @@ class StrategyEngine:
         
         # ابتدا تحلیل کامل را انجام بده
         analysis_result = await self.analysis_engine.perform_full_analysis(
-            token_info['pool_id'], timeframe, aggregate, token_info['symbol']
+            token_info['pool_id'], token_info['address'], timeframe, aggregate, token_info['symbol']
         )
         
         if not analysis_result:

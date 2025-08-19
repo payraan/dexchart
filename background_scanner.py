@@ -313,7 +313,7 @@ class BackgroundScanner:
                     else:
                         self.logger.info(f"📈 [SMART] Routing {token['symbol']} (Age: {age_days:.1f} days) → {aggregate}{timeframe[0].upper()}")
                         analysis_result = await self.strategy_engine.analysis_engine.perform_full_analysis(
-                            token['pool_id'], timeframe, aggregate, token['symbol']
+                            token['pool_id'], token['address'], timeframe, aggregate, token['symbol']
                         )
                         if analysis_result:
                             signal = await self.strategy_engine.detect_breakout_signal(analysis_result, token['address'])

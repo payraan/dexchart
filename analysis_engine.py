@@ -267,10 +267,10 @@ class AnalysisEngine:
             new_state = {
                 'token_address': token_address,
                 'timeframe': timeframe_str,
-                'high_point': high_point,
-                'low_point': low_point,
-                'target1_price': high_point + (price_range * 0.272),
-                'target2_price': high_point + (price_range * 0.618),
+                'high_point': float(high_point),
+                'low_point': float(low_point),
+                'target1_price': float(high_point + (price_range * 0.272)),
+                'target2_price': float(high_point + (price_range * 0.618)),
                 'status': 'ACTIVE'
             }
             db_manager.upsert_fibo_state(new_state)

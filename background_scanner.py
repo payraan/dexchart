@@ -41,7 +41,14 @@ class BackgroundScanner:
            # دریافت اطلاعات هولدر (قبل از ساخت پیام)
            holder_info_text = ""
            try:
-               holder_data = await self.holder_analyzer.get_holder_stats(token_address)
+               # فقط برای سیگنال‌های مهم holder data بگیر
+               important_signals = ['GEM_', 'breakout', 'breakdown']
+               if any(signal_word in signal_type for signal_word in important_signals):
+                   holder_data = await self.holder_analyzer.get_holder_stats(token_address)
+                   self.logger.info(f"💎 Holder data fetched for important signal: {signal_type}")
+               else:
+                   holder_data = None
+                   self.logger.info(f"⏭️ Skipped holder data for: {signal_type}")
                if holder_data:
                    holder_parts = []
                    

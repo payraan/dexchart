@@ -694,7 +694,7 @@ class AnalysisEngine:
             return None
             
         # Standard extension levels
-        ext_levels = [1.272, 1.618, 2.0, 2.618]
+        ext_levels = [1.272, 1.618]
         levels_dict = {}
         
         for level in ext_levels:
@@ -708,24 +708,43 @@ class AnalysisEngine:
             'low_point': low_point
         }
     
-    def detect_downtrend_line(self, df, min_touches=2, lookback=300, tolerance=0.005):
+    def detect_downtrend_line(self, df, min_touches=2, lookback=300, timeframe="hour", aggregate="1"):
         """
         Focus on RECENT price action for relevant trendlines
         """
         from scipy.signal import argrelextrema
         import numpy as np
-        
+
         if len(df) < 50:
             return None
-        
+
+        # --- [فاز 1] فیلتر کانتکست روند با EMA ---
+        if 'ema_50' in df.columns and not df['ema_50'].isnull().all():
+            current_price = df['close'].iloc[-1]
+            last_ema_50 = df['ema_50'].iloc[-1]
+            if current_price > last_ema_50 * 1.02:
+                return None
+
         # Focus on recent data (last 100-150 candles for better relevance)
         recent_window = min(150, len(df))
         df_analysis = df.iloc[-recent_window:].reset_index(drop=True)
-        
+
         highs = df_analysis['high'].values
-        
+
+        # --- [فاز 1] تنظیم داینامیک پارامترها ---
+        if timeframe == "minute":
+            order = 3
+        else:
+            order = 5
+
+        if timeframe == "minute" and int(aggregate) <= 5:
+            tolerance = 0.02   # 2% برای 1M-5M
+        elif timeframe == "minute":
+            tolerance = 0.015  # 1.5% برای 15M
+        else:
+            tolerance = 0.01   # 1% برای 1H+
+   
         # Find swing highs
-        order = 4  # Smaller order to catch more recent swings
         high_indices = argrelextrema(highs, np.greater, order=order)[0]
         
         if len(high_indices) < 2:
@@ -743,91 +762,99 @@ class AnalysisEngine:
             return None
         
         # Find the highest point among recent highs
-        recent_peak_idx = max(recent_highs, key=lambda x: highs[x])
-        recent_peak_price = highs[recent_peak_idx]
-        
-        # Check if we're in a downtrend from this peak
-        current_price = highs[-1]
-        # شرط شل‌تر: فقط کافی است قیمت از peak پایین‌تر باشد
-        if current_price >= recent_peak_price:  # Only skip if at or above peak
+        # --- [فاز 2] الگوریتم نهایی: اولویت با قله + تایید با شکست ساختار ---
+
+        # گام 1: امتیازدهی به تمام سقف‌های شناسایی شده
+        peak_scores = []
+        for idx in high_indices:
+            # امتیاز ارتفاع (نسبت به میانگین)
+            height_score = highs[idx] / df_analysis['high'].mean() if df_analysis['high'].mean() > 0 else 1
+            # امتیاز تازگی (سقف‌های جدیدتر امتیاز بیشتر)
+            recency_score = idx / len(highs)
+            # امتیاز کل
+            total_score = (height_score * 0.6) + (recency_score * 0.4)
+            peak_scores.append({'idx': idx, 'price': highs[idx], 'score': total_score})
+
+        # مرتب‌سازی سقف‌ها بر اساس امتیاز (مهم‌ترین‌ها در ابتدا)
+        peak_scores.sort(key=lambda x: x['score'], reverse=True)
+
+        if len(peak_scores) < 2:
             return None
-        
-        best_line = None
-        best_score = 0
-        
-        # Try to connect recent highs
-        for i in range(len(recent_highs)):
-            for j in range(i + 1, len(recent_highs)):
-                p1_idx = recent_highs[i]
-                p2_idx = recent_highs[j]
-                
-                # Ensure we include the recent peak
-                #if recent_peak_idx not in [p1_idx, p2_idx]:
-                #    continue
-                
-                p1_price = highs[p1_idx]
-                p2_price = highs[p2_idx]
-                
-                # Skip if too close
-                if abs(p2_idx - p1_idx) < 8:
+
+        # گام 2: جستجو برای یک الگوی معتبر (Lower High + Break of Structure)
+        for i in range(len(peak_scores)):
+            for j in range(i + 1, len(peak_scores)):
+                peak_a = peak_scores[i]
+                peak_b = peak_scores[j]
+
+                # تعیین ترتیب زمانی سقف‌ها (p1 همیشه قبل از p2 است)
+                if peak_a['idx'] < peak_b['idx']:
+                    p1, p2 = peak_a, peak_b
+                else:
+                    p1, p2 = peak_b, peak_a
+
+                # شرط 1: آیا یک الگوی سقف پایین‌تر (Lower High) داریم؟
+                if p2['price'] >= p1['price']:
                     continue
-                
-                # Calculate slope
-                slope = (p2_price - p1_price) / (p2_idx - p1_idx)
-                
-                # Only downward or horizontal slopes
-                if slope > 0.0001:
+
+                # شرط 2: آیا شکست ساختار (Break of Structure) رخ داده است؟
+                lows_between = df_analysis['low'].iloc[p1['idx']:p2['idx']]
+                if lows_between.empty:
                     continue
-                
-                intercept = p1_price - slope * p1_idx
-                
-                # Validate
-                is_valid = True
-                for k in range(min(p1_idx, p2_idx) + 1, max(p1_idx, p2_idx)):
-                    predicted = slope * k + intercept
-                    if highs[k] > predicted * (1 + tolerance):
-                        is_valid = False
-                        break
-                
-                if not is_valid:
+
+                support_level = lows_between.min()
+
+                # بررسی قیمت‌ها بعد از سقف دوم برای یافتن شکست حمایت
+                price_after_p2 = df_analysis['low'].iloc[p2['idx']:]
+                if price_after_p2.empty:
                     continue
-                
-                # Count touches
-                touches = 0
-                for k in range(len(highs)):
-                    predicted = slope * k + intercept
-                    if abs(highs[k] - predicted) / predicted < tolerance:
-                        touches += 1
-                
-                # Scoring
-                score = touches * 3
-                
-                # Big bonus for including the recent peak
-                if recent_peak_idx in [p1_idx, p2_idx]:
-                    score += 25
-                
-                # Bonus for recency (prefer newer lines)
-                avg_idx = (p1_idx + p2_idx) / 2
-                recency_bonus = (avg_idx / len(highs)) * 10  # 0-10 points
-                score += recency_bonus
-                
-                # Length bonus
-                score += (abs(p2_idx - p1_idx)) * 0.1
-                
-                if score > best_score and touches >= min_touches:
-                    best_score = score
-                    best_line = {
-                        'start_point': (df_analysis['timestamp'].iloc[p1_idx], p1_price),
-                        'end_point': (df_analysis['timestamp'].iloc[p2_idx], p2_price),
-                        'slope': slope,
-                        'intercept': intercept,
-                        'touches': touches,
-                        'confidence_score': score,
-                        'start_idx': p1_idx,
-                        'end_idx': p2_idx
-                    }
-        
-        return best_line
+
+                if price_after_p2.min() < support_level:
+                    # ✅ تایید نهایی! هم Lower High داریم و هم Break of Structure.
+                    slope = (p2['price'] - p1['price']) / (p2['idx'] - p1['idx'])
+                    intercept = p1['price'] - slope * p1['idx']
+                    # --- قانون عدم عبور: بررسی که خط از هیچ کندلی رد نشه ---
+                    is_valid_path = True
+                    
+                    # بررسی تمام کندل‌های بین دو سقف
+                    for k in range(p1['idx'] + 1, p2['idx']):
+                        # محاسبه سقف پیش‌بینی شده توسط خط روند
+                        predicted_ceiling = slope * k + intercept
+                        # قیمت بالای واقعی کندل
+                        actual_high = df_analysis['high'].iloc[k]
+                        
+                        # اگر حتی یک کندل بالاتر از خط باشد، نامعتبر است
+                        if actual_high > predicted_ceiling:
+                            is_valid_path = False
+                            break
+                    
+                    if not is_valid_path:
+                        continue  # به سراغ زوج بعدی برو
+                    # --------------------------------------------------------                    
+
+
+                    # شمارش تعداد کل تماس‌ها با خط روند پیدا شده
+                    touches = 0
+                    for k_idx in high_indices:
+                        predicted_price = slope * k_idx + intercept
+                        actual_price = highs[k_idx]
+                        if abs(actual_price - predicted_price) / actual_price < tolerance:
+                            touches += 1
+
+                    if touches >= min_touches:
+                        return {
+                            'start_point': (df_analysis['timestamp'].iloc[p1['idx']], p1['price']),
+                            'end_point': (df_analysis['timestamp'].iloc[p2['idx']], p2['price']),
+                            'slope': slope,
+                            'intercept': intercept,
+                            'touches': touches,
+                            'confidence_score': p1['score'] + p2['score'] + 50,
+                            'start_idx': p1['idx'],
+                            'end_idx': p2['idx'],
+                            'break_of_structure': True
+                        }
+
+        return None
 
     def draw_fibonacci_extensions(self, ax, fib_ext_data):
         """Draw Fibonacci extension levels on the chart."""

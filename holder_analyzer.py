@@ -4,6 +4,7 @@ from typing import Dict, List, Optional
 from datetime import datetime
 import logging
 from config import TradingConfig
+import time
 
 class HolderAnalyzer:
     def __init__(self, api_key: str = TradingConfig.HOLDER_API_KEY):
@@ -14,6 +15,9 @@ class HolderAnalyzer:
         self.base_url = "https://api.holderscan.com/v0"
         self.headers = {"x-api-key": self.api_key}
         self.logger = logging.getLogger(__name__)
+        # کش برای صرفه‌جویی API
+        self.cache = {}
+        self.cache_duration = 21600  # 6 ساعت
 
         # این متغیر به صورت استاندارد، فعال بودن این ماژول را کنترل می‌کند
         self.is_enabled = bool(self.api_key)
@@ -46,6 +50,31 @@ class HolderAnalyzer:
         return None
 
     async def get_holder_stats(self, token_address: str) -> Optional[Dict]:
+        """دریافت آمار هولدرها با کش 6 ساعته"""
+        if not self.is_enabled:
+            return None
+    
+        # چک کردن کش
+        cache_key = f"holder_{token_address}"
+        if cache_key in self.cache:
+            cached_time = self.cache[cache_key].get('timestamp', 0)
+            if time.time() - cached_time < self.cache_duration:
+                return self.cache[cache_key]['data']
+    
+        # API call فقط اگر کش expired بود
+        holder_data = await self._get_fresh_holder_data(token_address)
+    
+        # ذخیره در کش
+        if holder_data:
+            self.cache[cache_key] = {
+                'data': holder_data,
+                'timestamp': time.time()
+            }
+    
+        return holder_data
+
+    async def _get_fresh_holder_data(self, token_address: str) -> Optional[Dict]:
+        """تابع اصلی دریافت داده از API"""
         """
         دریافت آمار کامل هولدرها برای یک توکن Solana.
         این تابع بازنویسی شده تا از متد کمکی _make_request استفاده کند.

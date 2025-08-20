@@ -17,6 +17,9 @@ from telegram.ext import CallbackQueryHandler, CommandHandler
 from token_cache import TokenCache
 from config import Config, TradingConfig
 from database_manager import db_manager
+from subscription_manager import subscription_manager
+from ai_analyzer import ai_analyzer
+from analysis_engine import AnalysisEngine
 
 # Configuration
 BOT_TOKEN = Config.BOT_TOKEN
@@ -85,9 +88,53 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_message = update.message.text
     await update.message.reply_text(f"✅ Webhook Bot Working! You said: {user_message}")
 
+async def activate_subscription_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /activatetnt command for admins"""
+    user = update.effective_user
+    if user.id not in Config.ADMIN_IDS:
+        await update.message.reply_text("❌ You are not authorized to use this command.")
+        return
+
+    try:
+        parts = context.args
+        target_user_id = int(parts[0])
+        sub_type = parts[1] 
+        days = int(parts[1])
+
+        subscription_manager.activate_subscription(
+            user_id=target_user_id,
+            subscription_type=sub_type,
+            days=days,
+            activated_by=user.id
+        )
+
+        await update.message.reply_text(
+            f"✅ Subscription activated successfully!\n"
+            f"User: {target_user_id}\n"
+            f"Type: {sub_type}\n" 
+            f"Duration: {days} days"
+        )
+    except (IndexError, ValueError):
+        await update.message.reply_text(
+            "Invalid format. Use: /activatetnt USER_ID TYPE DAYS\n"
+            "Example: /activatetnt 123456 NarmoonDEX 30"
+        )
+
 async def chart_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle token address for chart creation"""
     message = update.message.text
+    
+    # Check subscription before processing
+    user_id = update.effective_user.id
+    print(f"🔍 Subscription check: user_id={user_id}, subscription={subscription}")
+    subscription = subscription_manager.check_subscription(user_id)
+    
+    if not subscription["active"]:
+        await update.message.reply_text(
+            "⚠️ Access Denied\n\n"
+            "You do not have an active subscription. Please contact support to activate your account."
+        )
+        return
     print(f"🔍 DEBUG: Received message: {message}")
     print(f"🔍 DEBUG: Message length: {len(message)}")    
 
@@ -235,6 +282,68 @@ async def chart_button_callback(update: Update, context: ContextTypes.DEFAULT_TY
         import traceback
         print(f"❌ DEBUG: Full traceback:\n{traceback.format_exc()}")
 
+async def ai_analysis_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle AI analysis button click"""
+    query = update.callback_query
+    await query.answer()
+
+    user_id = query.from_user.id
+    subscription = subscription_manager.check_subscription(user_id)
+
+    if not subscription['active']:
+        await query.edit_message_text(text="⚠️ Access Denied. You need an active subscription for AI analysis.")
+        return
+
+    await query.edit_message_caption(caption=query.message.caption + "\n\n⏳ در حال تحلیل با هوش مصنوعی...")
+
+    try:
+        # Parse callback data: ai_analyze_{token_address}_{timeframe}_{aggregate}
+        parts = query.data.split('_')
+        token_address = parts[1]
+        timeframe = parts[2] 
+        aggregate = parts[3]
+
+        # Find pool and create chart
+        search_url = f"https://api.geckoterminal.com/api/v2/search/pools?query={token_address}"
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(search_url)
+            if response.status_code != 200:
+                await query.message.reply_text("❌ Error finding token pool for AI analysis.")
+                return
+
+            pools = response.json().get('data', [])
+            if not pools:
+                await query.message.reply_text("❌ Token pool not found.")
+                return
+
+            pool_id = pools[0]['id']
+
+        # Generate chart
+        analysis_engine = AnalysisEngine()
+        analysis_result = await analysis_engine.perform_full_analysis(
+            pool_id, token_address, timeframe, aggregate, "AI Analysis"
+        )
+
+        if not analysis_result:
+            await query.message.reply_text("❌ Could not generate chart for AI analysis.")
+            return
+
+        chart_image = await analysis_engine.create_chart(analysis_result)
+        chart_image_bytes = chart_image.getvalue()
+
+        # Send to Gemini AI
+        ai_response = await ai_analyzer.analyze_chart_with_gemini(chart_image_bytes)
+
+        # Send response
+        await query.message.reply_text(text=ai_response, reply_to_message_id=query.message.message_id)
+        
+        # Clean up loading message
+        original_caption = query.message.caption.replace("\n\n⏳ در حال تحلیل با هوش مصنوعی...", "")
+        await query.edit_message_caption(caption=original_caption)
+
+    except Exception as e:
+        await query.message.reply_text(f"An error occurred during AI analysis: {str(e)}")
+
 async def trending_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /trending command"""
     await update.message.reply_text("🔍 Fetching trending tokens...")
@@ -267,6 +376,8 @@ async def trending_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chart_message_handler))
 application.add_handler(CallbackQueryHandler(chart_button_callback))
 application.add_handler(CommandHandler("trending", trending_command))
+application.add_handler(CommandHandler("activatetnt", activate_subscription_command))
+application.add_handler(CallbackQueryHandler(ai_analysis_callback, pattern=r"^ai_analyze|"))
 
 
 

@@ -65,6 +65,19 @@ class TokenCache:
                 last_message_id INTEGER DEFAULT NULL
             )
         ''')
+
+        # 6. جدول اشتراک کاربران
+        db_manager.execute(f'''
+            CREATE TABLE IF NOT EXISTS user_subscriptions (
+                user_id BIGINT PRIMARY KEY,
+                subscription_type TEXT NOT NULL DEFAULT 'NarmoonDEX',
+                start_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                end_date TIMESTAMP NOT NULL,
+                is_active BOOLEAN DEFAULT TRUE,
+                activated_by BIGINT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
         print("✅ Database tables checked/created successfully.")
 
     async def fetch_trending_tokens(self):

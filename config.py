@@ -19,6 +19,10 @@ class Config:
    TRENDING_TOKENS_LIMIT = int(os.getenv("TRENDING_TOKENS_LIMIT", "50"))
    GECKOTERMINAL_RATE_LIMIT = int(os.getenv("GECKOTERMINAL_RATE_LIMIT", "30"))
 
+   # Admin and AI settings  
+   ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x]
+   GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+
 # Logging configuration
 logging.basicConfig(   
    level=logging.INFO,

@@ -185,28 +185,13 @@ class BackgroundScanner:
            try:
                if chart_image:
                    try:
-                       # Create AI analysis button
-                       if analysis_result:
-                           metadata = analysis_result.get('metadata', {})
-                           timeframe = metadata.get('timeframe', 'hour')
-                           aggregate = metadata.get('aggregate', '1')
-                           keyboard = [[
-                               InlineKeyboardButton(
-                                   "🧠 دریافت سیگنال هوش مصنوعی",
-                                   callback_data=f"ai_analyze|{token_address}|{timeframe}|{aggregate}"
-                               )
-                           ]]
-                           reply_markup = InlineKeyboardMarkup(keyboard)
-                       else:
-                           reply_markup = None
                        sent_message = await asyncio.wait_for(
                            self.bot.send_photo(
                                chat_id=self.chat_id, 
                                photo=chart_image, 
                                caption=message,
                                parse_mode='Markdown', 
-                               reply_to_message_id=reply_to_message_id,
-                               reply_markup=reply_markup
+                               reply_to_message_id=reply_to_message_id
                            ),
                            timeout=10  # حداکثر 10 ثانیه
                        )

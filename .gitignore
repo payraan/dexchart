@@ -39,3 +39,4 @@ test_*.py
 debug_*.py
 Token*.png
 *.png
+.env

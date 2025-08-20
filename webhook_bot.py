@@ -298,7 +298,7 @@ async def ai_analysis_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
     try:
         # Parse callback data: ai_analyze_{token_address}_{timeframe}_{aggregate}
-        parts = query.data.split('_')
+        parts = query.data.split('|')
         token_address = parts[1]
         timeframe = parts[2] 
         aggregate = parts[3]

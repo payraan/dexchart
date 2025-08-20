@@ -372,9 +372,36 @@ async def trending_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ Error fetching trending tokens: {str(e)}")
 
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /start command with subscription check"""
+    user_id = update.effective_user.id
+    
+    if not subscription_manager.check_subscription(user_id):
+        welcome_message = """🔒 **دسترسی محدود**
+
+برای استفاده از ربات تحلیل توکن‌های سولانا، نیاز به فعال‌سازی اشتراک دارید.
+
+📞 **برای فعال‌سازی:**
+👈 https://t.me/Narmoonsupport
+
+✨ **امکانات پس از فعال‌سازی:**
+- اسکن ۲۴ ساعته توکن‌های ترند
+- تحلیل تکنیکال پیشرفته  
+- سیگنال‌های هوش مصنوعی
+- نمودارهای حرفه‌ای"""
+        await update.message.reply_text(welcome_message, parse_mode='Markdown')
+    else:
+        await update.message.reply_text(
+            "🎯 **خوش آمدید!**\\n\\n"
+            "📊 برای دریافت چارت، آدرس توکن سولانا را ارسال کنید\\n"
+            "📈 /trending - مشاهده توکن‌های ترند", 
+            parse_mode='Markdown'
+        )
+
 # Add handlers
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chart_message_handler))
 application.add_handler(CallbackQueryHandler(chart_button_callback))
+application.add_handler(CommandHandler("start", start_command))
 application.add_handler(CommandHandler("trending", trending_command))
 application.add_handler(CommandHandler("activatetnt", activate_subscription_command))
 application.add_handler(CallbackQueryHandler(ai_analysis_callback, pattern=r"^ai_analyze|"))

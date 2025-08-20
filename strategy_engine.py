@@ -358,92 +358,109 @@ class StrategyEngine:
     # کد تابع has_recent_alert که در مرحله قبل اصلاح شد، در اینجا باید قرار گیرد
     # در strategy_engine.py
 
+    # در فایل: strategy_engine.py
+    # این دو تابع را به طور کامل جایگزین تابع has_recent_alert فعلی کنید.
+
+    def _is_signal_confident(self, signal):
+        """
+        یک فیلتر نهایی برای بررسی امتیاز اطمینان سیگنال.
+        این تابع تصمیم می‌گیرد که آیا یک سیگنال ارزش ارسال دارد یا خیر.
+        """
+        signal_type = signal.get('signal_type', '')
+        confidence_score = signal.get('confidence_score', 0)
+
+        # اگر سیگنال از قبل امتیازدهی شده (مثل GEM_BREAKOUT_CONFIRMED)
+        if confidence_score > 0:
+            # حداقل امتیاز ۷ برای سیگنال‌های امتیازدهی شده
+            is_confident = confidence_score >= 7
+            if not is_confident:
+                self.logger.info(f"🔵 Signal for {signal.get('symbol')} rejected. Score: {confidence_score}/10 (Threshold: 7)")
+            return is_confident
+
+        # امتیازدهی پایه برای سیگنال‌های قدیمی‌تر که هنوز سیستم امتیازدهی ندارند
+        if signal_type == 'PULLBACK_RETEST_CONFIRMED':
+            return True # این الگو همیشه باکیفیت است
+        elif 'breakout' in signal_type:
+            return True # breakout های قدیمی‌تر را فعلا عبور می‌دهیم
+
+        # بقیه سیگنال‌های کم‌اهمیت‌تر رد می‌شوند
+        self.logger.info(f"🔵 Signal for {signal.get('symbol')} ({signal_type}) rejected due to low base priority.")
+        return False
+
     async def has_recent_alert(self, signal, cooldown_hours=None):
         """
-        Checks for recent alerts based on PRICE CHANGE, not just time.
-        Only allows new alert if price changed significantly.
+        ابتدا امتیاز اطمینان سیگنال را بررسی می‌کند و سپس وضعیت کول‌داون را چک می‌کند.
         """
-        from datetime import datetime, timedelta
+        # --- فیلتر شماره ۱: بررسی امتیاز اطمینان ---
+        if not self._is_signal_confident(signal):
+            return True  # True یعنی "یک هشدار اخیر وجود دارد" که باعث جلوگیری از ارسال می‌شود
 
+        # --- فیلتر شماره ۲: بررسی کول‌داون زمانی و قیمتی (منطق قبلی) ---
+        from datetime import datetime, timedelta
         signal_type = signal.get('signal_type', '')
         current_price = signal.get('current_price', 0)
-        
+
         # تعیین درصد تغییر مورد نیاز برای سیگنال جدید
         if signal_type.startswith('GEM_'):
-            price_change_threshold = 0.10  # 3% برای توکن‌های جدید
+            price_change_threshold = 0.10  # 10% برای توکن‌های جدید
             min_cooldown_hours = 0.5  # حداقل 30 دقیقه
         elif 'support' in signal_type.lower():
-            price_change_threshold = 0.08  # 2% برای سیگنال‌های حمایت
+            price_change_threshold = 0.08  # 8% برای سیگنال‌های حمایت
             min_cooldown_hours = 1.0
         else:
-            price_change_threshold = 0.09  # 2.5% برای بقیه
+            price_change_threshold = 0.09  # 9% برای بقیه
             min_cooldown_hours = 2.0
-        
+
         # دریافت آخرین سیگنال مشابه از دیتابیس
         placeholder = "%s" if db_manager.is_postgres else "?"
         query = f"""
-            SELECT price_at_alert, timestamp 
-            FROM alert_history 
-            WHERE token_address = {placeholder} 
+            SELECT price_at_alert, timestamp
+            FROM alert_history
+            WHERE token_address = {placeholder}
             AND signal_type = {placeholder}
-            ORDER BY timestamp DESC 
+            ORDER BY timestamp DESC
             LIMIT 1
         """
         params = (signal['token_address'], signal_type)
-        
+
         try:
             result = db_manager.fetchone(query, params)
-            
-            # لاگ برای دیباگ
             self.logger.info(f"🔍 Cooldown check for {signal.get('symbol')}: Result={result}")
-            
+
             if result:
-                # اصلاح: result یک dictionary است، نه tuple
                 if isinstance(result, dict):
                     last_price = float(result.get('price_at_alert', 0))
-                    last_timestamp = result.get('timestamp', '')
+                    last_timestamp_str = result.get('timestamp', '')
                 else:
-                    last_price = float(result[0]) if result[0] else 0
-                    last_timestamp = result[1] if len(result) > 1 else ''
-                
-                if not last_timestamp:
+                    last_price = float(result[0]) if result and result[0] else 0
+                    last_timestamp_str = result[1] if result and len(result) > 1 else ''
+
+                if not last_timestamp_str:
                     return False
-                    
-                last_timestamp = datetime.fromisoformat(last_timestamp)
+
+                last_timestamp = datetime.fromisoformat(last_timestamp_str)
                 time_passed = (datetime.now() - last_timestamp).total_seconds() / 3600
-                
-                # لاگ دیباگ
+
                 self.logger.info(f"📊 Last: ${last_price:.10f}, Now: ${current_price:.10f}, Time: {time_passed:.1f}h")
-            
-                # چک کردن تغییر قیمت
+
                 if last_price > 0 and current_price > 0:
                     price_change = abs(current_price - last_price) / last_price
-                    
-                    # اگر قیمت کافی تغییر نکرده و زمان کافی نگذشته
+
+                    # اگر قیمت به اندازه کافی تغییر نکرده و زمان کافی هم نگذشته باشد
                     if price_change < price_change_threshold and time_passed < min_cooldown_hours:
                         self.logger.info(
                             f"🔵 [COOLDOWN] {signal['symbol']} ({signal_type}): "
                             f"Price change only {price_change:.1%} (need {price_change_threshold:.1%}) "
                             f"in {time_passed:.1f}h"
                         )
-                        return True
-                    
-                    # اگر قیمت کافی تغییر کرده، سیگنال جدید OK است
-                    if price_change >= price_change_threshold:
-                        self.logger.info(
-                            f"✅ [PRICE-CHANGE] {signal['symbol']}: "
-                            f"Price changed {price_change:.1%}, new signal allowed"
-                        )
-                        return False
-                
-            return False  # اگر هیچ سیگنال قبلی نبود
-            
+                        return True # جلوگیری از ارسال
+
+            return False  # اگر هیچ سیگنال قبلی نبود یا شرایط کول‌داون برقرار نبود
+
         except Exception as e:
-            self.logger.error(f"❌ Error in has_recent_alert: {e}")
+            self.logger.error(f"❌ Error in has_recent_alert for {signal.get('symbol')}: {e}")
             return False
- 
-    # در فایل: strategy_engine.py
-    # این کد را به طور کامل جایگزین تابع detect_gem_momentum_signal کنید.
+
 
     async def detect_gem_momentum_signal(self, df_gem, token_info, timeframe="minute", aggregate="5"):
         """
@@ -516,6 +533,63 @@ class StrategyEngine:
                 }, analysis_result)
 
         self.logger.info(f"❌ {token_info['symbol']}: No valid GEM signal conditions met.")
+        return None
+
+    async def detect_pullback_retest_signal(self, analysis_result, token_address):
+        """
+        استراتژی پیشرفته Pullback/Retest - احتمال موفقیت بالا
+        شرایط:
+        1. شکست سطح مقاومت اخیر
+        2. بازگشت به سطح شکسته شده (pullback)
+        3. تایید حمایت در همان سطح (retest)
+        """
+        if not analysis_result:
+            return None
+            
+        df = analysis_result['raw_data']['dataframe']
+        current_price = analysis_result['raw_data']['current_price']
+        
+        if len(df) < 30:
+            return None
+        
+        # شناسایی سطح مقاومت شکسته شده اخیر
+        recent_data = df.iloc[-30:-5]
+        if recent_data.empty:
+            return None
+            
+        resistance_level = recent_data['high'].max()
+        resistance_idx = recent_data['high'].idxmax()
+        
+        # بررسی شکست سطح
+        data_after_resistance = df.iloc[resistance_idx + 1:]
+        if data_after_resistance.empty or data_after_resistance['high'].max() <= resistance_level:
+            return None
+        
+        # بررسی pullback و retest
+        last_5_candles = df.iloc[-5:]
+        
+        # آیا قیمت به سطح مقاومت پولبک زده؟
+        pullback_occurred = (last_5_candles['low'].min() <= resistance_level * 1.03) and \
+                           (last_5_candles['low'].min() > resistance_level * 0.97)
+        
+        # آیا قیمت در حال حاضر بالاتر از سطح است؟
+        successful_retest = current_price > resistance_level
+        
+        if pullback_occurred and successful_retest:
+            confidence_score = 8  # امتیاز پایه بالا برای این الگو
+            
+            return {
+                'signal_type': 'PULLBACK_RETEST_CONFIRMED',
+                'token_address': token_address,
+                'pool_id': analysis_result['metadata']['pool_id'],
+                'symbol': analysis_result['metadata']['symbol'],
+                'current_price': current_price,
+                'zone_price': resistance_level,
+                'confidence_score': confidence_score,
+                'analysis_result': analysis_result,
+                'timestamp': datetime.now().isoformat()
+            }
+        
         return None
 
     def _create_gem_signal(self, signal_type, token_info, price, details, analysis_result):

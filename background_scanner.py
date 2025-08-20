@@ -131,6 +131,19 @@ class BackgroundScanner:
                    f"{holder_info_text}\n"
                    f"Time: `{signal.get('timestamp', '')}`"
                )
+           elif signal_type == 'PULLBACK_RETEST_CONFIRMED':
+               zone_price = signal.get('zone_price', 0)
+               confidence_score = signal.get('confidence_score', 0)
+               message = (
+                   f"🎯 *PULLBACK RETEST CONFIRMED*\n\n"
+                   f"**Token:** *{symbol}*\n"
+                   f"**Confidence:** `{confidence_score}/10`\n"
+                   f"**Current Price:** `${current_price:.6f}`\n"
+                   f"{holder_info_text}\n"
+                   f"**Retested Level:** `${zone_price:.6f}`\n"
+                   f"**Strategy:** High probability reversal setup\n\n"
+                   f"Time: `{signal.get('timestamp', '')}`"
+               )
 
            elif 'breakout' in signal_type or 'resistance' in signal_type:
                broken_level = signal.get('level_broken', 0)
@@ -316,7 +329,11 @@ class BackgroundScanner:
                             token['pool_id'], token['address'], timeframe, aggregate, token['symbol']
                         )
                         if analysis_result:
-                            signal = await self.strategy_engine.detect_breakout_signal(analysis_result, token['address'])
+                            signal = await self.strategy_engine.detect_breakout_signal(analysis_result, token["address"])
+                            
+                            # اگر سیگنال breakout نبود، pullback/retest را چک کن
+                            if not signal:
+                                signal = await self.strategy_engine.detect_pullback_retest_signal(analysis_result, token["address"])
                 
                 if signal:
                     self.logger.info(f"📍 Signal detected - Type: {signal.get('signal_type')}, Symbol: {signal.get('symbol')}, Tier: {signal.get('zone_tier', 'N/A')}")

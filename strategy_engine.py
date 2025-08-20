@@ -442,79 +442,80 @@ class StrategyEngine:
             self.logger.error(f"❌ Error in has_recent_alert: {e}")
             return False
  
-    async def detect_gem_momentum_signal(self, df_gem, token_info, timeframe="minute", aggregate="5"):
+    # در فایل: strategy_engine.py
+    # این کد را به طور کامل جایگزین تابع detect_gem_momentum_signal کنید.
 
-        """استراتژی اختصاصی برای شکار توکن‌های جدید (Gem Hunter)."""
-        
-        self.logger.info(f"🔍 GEM HUNTER analyzing {token_info['symbol']}: {len(df_gem)} candles available")
-        
-        # ابتدا تحلیل کامل را انجام بده
+    async def detect_gem_momentum_signal(self, df_gem, token_info, timeframe="minute", aggregate="5"):
+        """
+        استراتژی اختصاصی و بازنویسی شده برای شکار توکن‌های جدید (Gem Hunter)
+        با اعتبارسنجی چندلایه.
+        """
+        self.logger.info(f"🔍 GEM HUNTER analyzing {token_info['symbol']}...")
+
+        # حداقل به ۲۰ کندل برای تحلیل نیاز داریم
+        if df_gem is None or len(df_gem) < 20 or 'ema_50' not in df_gem.columns:
+            self.logger.info(f"⏭️ Skipping {token_info['symbol']}: Insufficient data for GEM analysis.")
+            return None
+
+        current_price = df_gem['close'].iloc[-1]
+        last_ema_50 = df_gem['ema_50'].iloc[-1]
+
+        # --- فیلتر شماره ۱: بررسی روند کلی (Trend Filter) ---
+        # اگر قیمت زیر EMA-50 باشد، توکن در روند صعودی نیست و ادامه نمی‌دهیم.
+        if current_price < last_ema_50:
+            self.logger.info(f"❌ {token_info['symbol']}: Trend is not bullish (Price < EMA50). Skipping GEM strategies.")
+            return None
+
         analysis_result = await self.analysis_engine.perform_full_analysis(
             token_info['pool_id'], token_info['address'], timeframe, aggregate, token_info['symbol']
         )
-        
         if not analysis_result:
-            self.logger.info(f"❌ {token_info['symbol']}: Full analysis failed for GEM")
             return None
-                
-        # بررسی که توکن واقعاً جدید باشه
-        if len(df_gem) > 576:  # بیشتر از 24 ساعت داده (288 کندل 5 دقیقه‌ای)
-            self.logger.info(f"⏭️ {token_info['symbol']}: Too old for GEM strategy ({len(df_gem)} candles)")
-            return None
-        
-        # بررسی که قیمت در روند صعودی کلی باشه
-        if len(df_gem) > 12:  # حداقل 1 ساعت داده
-            price_1h_ago = df_gem['close'].iloc[-12]
-            current_price_check = df_gem['close'].iloc[-1]
-            
-            if current_price_check < price_1h_ago * 0.8:  # اگر بیش از 20% افت داشته
-                self.logger.info(f"📉 {token_info['symbol']}: Downtrend detected, skipping GEM signal")
-                return None
-        
-        current_price = df_gem['close'].iloc[-1]
-        ath = df_gem['high'].max() # All-Time High در بازه دریافتی
-        
-        # --- استراتژی 1: حجم انفجاری ---
+
+        # --- استراتژی ۱: حجم انفجاری (Volume Spike) ---
         if len(df_gem) >= 10:
             current_volume = df_gem['volume'].iloc[-1]
             avg_volume = df_gem['volume'].iloc[-10:-1].mean()
-            
-            if avg_volume > 0 and current_volume > avg_volume * 2:  # حجم 5 برابر میانگین
+            if avg_volume > 0 and current_volume > avg_volume * 4:  # حجم ۴ برابر میانگین
                 self.logger.info(f"🚀 {token_info['symbol']}: Volume spike detected! Ratio: {current_volume/avg_volume:.1f}x")
                 return self._create_gem_signal('GEM_VOLUME_SPIKE', token_info, current_price, {
                     "Volume Ratio": f"{current_volume/avg_volume:.1f}x"
                 }, analysis_result)
-        
-        # --- استراتژی 2: الگوی شکست پس از تثبیت (Consolidation Breakout) ---
-        if len(df_gem) >= 12: # حداقل ۱ ساعت داده لازم است
-            last_12_candles = df_gem.iloc[-12:] # یک ساعت اخیر
+
+        # --- استراتژی ۲: شکست پس از تثبیت (Consolidation Breakout) ---
+        if len(df_gem) >= 12:
+            last_12_candles = df_gem.iloc[-12:]
             high_1h = last_12_candles['high'].max()
             low_1h = last_12_candles['low'].min()
             range_pct = (high_1h - low_1h) / current_price if current_price > 0 else 0
-            
-            self.logger.info(f"📊 {token_info['symbol']} - Range: {range_pct:.2%}, Current: {current_price:.8f}, High_1h: {high_1h:.8f}")
-            
-            # آیا قیمت در یک ساعت گذشته در یک محدوده باریک (کمتر از 35٪) تثبیت شده؟
-            if range_pct < 0.60:
-                # آیا قیمت در حال شکستن سقف این محدوده است؟
-                if current_price >= high_1h * 0.75:
-                    self.logger.info(f"💎 {token_info['symbol']}: Consolidation Breakout detected!")
-                    return self._create_gem_signal('GEM_BREAKOUT', token_info, current_price, {
-                        "Consolidation Range": f"{range_pct:.1%}"
-                    }, analysis_result)
-        
-        # --- استراتژی 3: رشد سریع قیمت ---
-        if len(df_gem) >= 6:  # حداقل 30 دقیقه داده
+
+            # شرط ۱: آیا قیمت در یک محدوده تنگ (کمتر از ۲۰٪) تثبیت شده؟
+            if range_pct < 0.20:
+                # شرط ۲: آیا قیمت واقعاً بالاتر از سقف محدوده شکسته است؟ (با یک حاشیه اطمینان ۳٪)
+                if current_price > high_1h:
+                    # شرط ۳ (تایید حجم): آیا حجم فعلی حداقل ۲ برابر میانگین است؟
+                    avg_volume_range = last_12_candles['volume'].mean()
+                    current_volume = df_gem['volume'].iloc[-1]
+                    if avg_volume_range > 0 and current_volume >= avg_volume_range * 2:
+                        self.logger.info(f"💎 {token_info['symbol']}: High-quality Consolidation Breakout detected!")
+                        return self._create_gem_signal('GEM_BREAKOUT', token_info, current_price, {
+                            "Consolidation Range": f"{range_pct:.1%}",
+                            "Volume Ratio": f"{current_volume/avg_volume_range:.1f}x"
+                        }, analysis_result)
+                    else:
+                        self.logger.info(f"⚠️ {token_info['symbol']}: Breakout detected but volume is too low.")
+
+        # --- استراتژی ۳: رشد سریع قیمت (Momentum) ---
+        if len(df_gem) >= 6:
             price_30m_ago = df_gem['close'].iloc[-6]
             price_growth = (current_price - price_30m_ago) / price_30m_ago if price_30m_ago > 0 else 0
-            
-            if price_growth > 0.15:  # رشد بیش از 25% در 30 دقیقه
+            if price_growth > 0.20:  # رشد بیش از ۲۰٪ در ۳۰ دقیقه
                 self.logger.info(f"🚀 {token_info['symbol']}: Rapid growth detected! {price_growth:.1%} in 30min")
                 return self._create_gem_signal('GEM_MOMENTUM', token_info, current_price, {
                     "30min Growth": f"{price_growth:.1%}"
                 }, analysis_result)
-        
-        self.logger.info(f"❌ {token_info['symbol']}: No GEM signal conditions met")
+
+        self.logger.info(f"❌ {token_info['symbol']}: No valid GEM signal conditions met.")
         return None
 
     def _create_gem_signal(self, signal_type, token_info, price, details, analysis_result):

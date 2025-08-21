@@ -404,7 +404,7 @@ application.add_handler(CallbackQueryHandler(chart_button_callback))
 application.add_handler(CommandHandler("start", start_command))
 application.add_handler(CommandHandler("trending", trending_command))
 application.add_handler(CommandHandler("activatetnt", activate_subscription_command))
-application.add_handler(CallbackQueryHandler(ai_analysis_callback, pattern=r"^ai_analyze|"))
+application.add_handler(CallbackQueryHandler(ai_analysis_callback, pattern=r"^ai_analyze\|"))
 
 
 

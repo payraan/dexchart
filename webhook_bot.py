@@ -1,3 +1,4 @@
+print("DEBUG: Attempting to start webhook_bot.py...")
 #!/usr/bin/env python3
 # webhook_bot.py
 # استفاده از Webhook به جای Polling برای حل مشکل Conflict

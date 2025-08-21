@@ -1,3 +1,4 @@
+print("DEBUG: Attempting to start run_scanner.py...")
 #!/usr/bin/env python3
 import asyncio
 import logging

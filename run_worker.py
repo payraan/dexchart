@@ -1,3 +1,4 @@
+print("DEBUG: Attempting to start run_worker.py...")
 #!/usr/bin/env python3
 import os
 from celery import Celery

@@ -129,7 +129,7 @@ async def chart_message_handler(update: Update, context: ContextTypes.DEFAULT_TY
     #print(f"🔍 Subscription check: user_id={user_id}, subscription={subscription}")
     subscription = subscription_manager.check_subscription(user_id)
     
-    if not subscription["active"]:
+    if not subscription:
         await update.message.reply_text(
             "⚠️ Access Denied\n\n"
             "You do not have an active subscription. Please contact support to activate your account."

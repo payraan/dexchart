@@ -46,7 +46,11 @@ class SubscriptionManager:
         if not result:
             return False
         
-        end_date = datetime.fromisoformat(result['end_date'])
+        end_date_value = result['end_date']
+        if isinstance(end_date_value, str):
+            end_date = datetime.fromisoformat(end_date_value)
+        else:
+            end_date = end_date_value
         if datetime.now() > end_date:
             # اشتراک منقضی شده
             self.deactivate_subscription(user_id)

@@ -11,7 +11,6 @@ import asyncio
 import httpx
 from contextlib import asynccontextmanager
 from analysis_engine import AnalysisEngine
-from background_scanner import BackgroundScanner
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CallbackQueryHandler, CommandHandler
 from token_cache import TokenCache
@@ -20,6 +19,7 @@ from database_manager import db_manager
 from subscription_manager import subscription_manager
 from ai_analyzer import ai_analyzer
 from analysis_engine import AnalysisEngine
+from tasks import generate_chart_task, ai_analysis_task
 
 # Configuration
 BOT_TOKEN = Config.BOT_TOKEN
@@ -48,22 +48,10 @@ async def lifespan(app: FastAPI):
     await application.initialize()
     print("🤖 Telegram application initialized")
     
-    scanner = BackgroundScanner(
-        bot_token=BOT_TOKEN,
-        chat_id=Config.CHAT_ID
-    )
-    # ایجاد یک task pool برای جداسازی scanner از chart generation
-    scanner_task = asyncio.create_task(scanner.start_scanning())
-    app.state.scanner_task = scanner_task
-    print("🔍 Background scanner started as separate task")
-    print("🔍 Background scanner started")
-    
     yield
     
     # Cleanup on shutdown
     print("🛑 Shutting down...")
-    if scanner:
-        scanner.running = False
     await application.shutdown()
     try:
         await bot.delete_webhook()
@@ -156,8 +144,7 @@ async def chart_message_handler(update: Update, context: ContextTypes.DEFAULT_TY
         await update.message.reply_text("Send a valid Solana token address (32-50 characters)")
 
 async def chart_button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle timeframe button selection"""
-    
+    """Handle timeframe selection and queue chart generation"""
     query = update.callback_query
     await query.answer()
     
@@ -172,235 +159,80 @@ async def chart_button_callback(update: Update, context: ContextTypes.DEFAULT_TY
     aggregate = timeframe_parts[1]
     
     display_name = f"{aggregate}{timeframe[0].upper()}"
-    await query.message.reply_text(f"⏳ Creating {display_name} chart...")
     
-    try:
-        analysis_engine = AnalysisEngine()
-        
-        # Find pool and create chart
-        search_url = f"https://api.geckoterminal.com/api/v2/search/pools?query={token_address}"
-        print(f"🔍 DEBUG: Searching for token: {token_address}")
-        print(f"🔍 DEBUG: Search URL: {search_url}")
-        
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(search_url)
-            print(f"🔍 DEBUG: API Response Status: {response.status_code}")
-            
-            if response.status_code == 200:
-                data = response.json()
-                pools = data.get('data', [])
-                print(f"🔍 DEBUG: Found {len(pools)} pools")
-                
-                if pools:
-                    # انتخاب بهترین pool بر اساس volume
-                    best_pool = None
-                    max_volume = 0
-                    
-                    for pool in pools:
-                        try:
-                            volume = float(pool.get('attributes', {}).get('volume_usd', {}).get('h24', 0))
-                            if volume > max_volume:
-                                max_volume = volume
-                                best_pool = pool
-                        except:
-                            continue
-                    
-                    if not best_pool:
-                        best_pool = pools[0]  # fallback به اولین pool
-                    
-                    pool_id = best_pool['id']
-                    print(f"🔍 DEBUG: Selected Pool ID: {pool_id}")
-                    
-                    # استخراج symbol
-                    symbol = "Unknown"
-                    try:
-                        relationships = best_pool.get('relationships', {})
-                        base_token = relationships.get('base_token', {}).get('data', {})
-                        if base_token:
-                            symbol = base_token.get('id', '').split('_')[-1]
-                        
-                        # اگر symbol هنوز Unknown است، از attributes امتحان کن
-                        if symbol == "Unknown" or not symbol:
-                            attributes = best_pool.get('attributes', {})
-                            symbol = attributes.get('name', 'Unknown').split('/')[0]
-                        
-                        print(f"🔍 DEBUG: Extracted Symbol: {symbol}")
-                    except Exception as symbol_error:
-                        print(f"⚠️ DEBUG: Symbol extraction error: {symbol_error}")
-                        symbol = "Unknown"
-                    
-                    # تحلیل و ساخت چارت
-                    print(f"🔄 DEBUG: Starting analysis for {symbol}...")
-                    analysis_result = await analysis_engine.perform_full_analysis(
-                        pool_id, token_address, timeframe, aggregate, symbol
-                    )
-                    
-                    print(f"🔍 DEBUG: Analysis result exists: {analysis_result is not None}")
-                    
-                    if analysis_result:
-                        # بررسی کیفیت داده‌ها
-                        df = analysis_result.get('raw_data', {}).get('dataframe')
-                        if df is not None and not df.empty:
-                            print(f"🔍 DEBUG: DataFrame shape: {df.shape}")
-                            print(f"🔍 DEBUG: Current price: {analysis_result.get('raw_data', {}).get('current_price')}")
-                            
-                            print("🎨 DEBUG: Creating chart...")
-                            chart_image = await analysis_engine.create_chart(analysis_result)
-                            print(f"🔍 DEBUG: Chart image exists: {chart_image is not None}")
-                            
-                            if chart_image:
-                                # Create AI analysis button
-                                keyboard = [[
-                                    InlineKeyboardButton(
-                                        "🧠 دریافت سیگنال هوش مصنوعی",
-                                        callback_data=f"ai|{token_address[:8]}|{timeframe}|{aggregate}"
-                                    )
-                                ]]
-                                reply_markup = InlineKeyboardMarkup(keyboard)
-
-                                await query.message.reply_photo(
-                                    photo=chart_image,
-                                    caption=f"📊 {symbol} {display_name} Chart",
-                                    reply_markup=reply_markup
-                                )
-                                print("✅ DEBUG: Chart sent successfully!")
-                            else:
-                                await query.message.reply_text("❌ Could not create chart - Image generation failed")
-                        else:
-                            await query.message.reply_text("❌ Could not create chart - No price data available")
-                            print("❌ DEBUG: Empty or invalid DataFrame")
-                    else:
-                        await query.message.reply_text("❌ Could not create chart - Analysis failed")
-                        print("❌ DEBUG: Analysis result is None")
-                        
-                else:
-                    await query.message.reply_text("❌ Token not found in any pools")
-                    print("❌ DEBUG: No pools found for this token")
-            else:
-                await query.message.reply_text(f"❌ API Error: {response.status_code}")
-                print(f"❌ DEBUG: API request failed with status {response.status_code}")
-                try:
-                    error_data = response.json()
-                    print(f"❌ DEBUG: API Error details: {error_data}")
-                except:
-                    print(f"❌ DEBUG: API Error response: {response.text[:200]}")
+    # Immediate response to user
+    await query.edit_message_text(
+        f"✅ Request received! Your {display_name} chart for `{token_address}` is being generated...",
+        parse_mode='Markdown'
+    )
     
-    except Exception as e:
-        error_msg = f"❌ Error: {str(e)}"
-        await query.message.reply_text(error_msg)
-        print(f"❌ DEBUG: Exception occurred: {e}")
-        import traceback
-        print(f"❌ DEBUG: Full traceback:\n{traceback.format_exc()}")
+    # Queue the task to Celery worker
+    generate_chart_task.delay(
+        chat_id=query.message.chat_id,
+        message_id=query.message.message_id,
+        token_address=token_address,
+        timeframe=timeframe,
+        aggregate=aggregate
+    )
 
 async def ai_analysis_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-   """Handle AI analysis button click for both scan signals and manual charts"""
-   query = update.callback_query
-   await query.answer()
+    """Handle AI analysis button click for both scan signals and manual charts"""
+    query = update.callback_query
+    await query.answer()
 
-   user_id = query.from_user.id
-   subscription = subscription_manager.check_subscription(user_id)
+    user_id = query.from_user.id
+    if not subscription_manager.check_subscription(user_id):
+        await query.message.reply_text("⚠️ Access Denied. You need an active subscription for AI analysis.")
+        return
 
-   if not subscription:
-       await query.message.reply_text("⚠️ Access Denied. You need an active subscription for AI analysis.")
-       return
+    current_caption = query.message.caption or ""
+    await query.edit_message_caption(caption=current_caption + "\n\n⏳ در حال تحلیل با هوش مصنوعی...")
 
-   current_caption = query.message.caption or ""
-   await query.edit_message_caption(caption=current_caption + "\n\n⏳ در حال تحلیل با هوش مصنوعی...")
+    try:
+        # Parse callback data for both formats
+        parts = query.data.split('|')
+        command = parts[0]
+        
+        token_address = None
+        timeframe = None
+        aggregate = None
 
-   try:
-       # Parse callback data for both formats
-       parts = query.data.split('|')
-       command = parts[0]
-       
-       if command == "ai_analyze":
-           # Format: ai_analyze|{full_token_address}|{timeframe}|{aggregate}
-           token_address = parts[1]
-           timeframe = parts[2]
-           aggregate = parts[3]
-       elif command == "ai":
-           # Format: ai|{short_address}|{timeframe}|{aggregate}
-           timeframe = parts[2]
-           aggregate = parts[3]
-           
-           # Extract full address from message caption
-           caption = query.message.caption or ""
-           import re
-           address_match = re.search(r'[A-Za-z0-9]{32,}', caption)
-           if address_match:
-               token_address = address_match.group()
-           else:
-               await query.message.reply_text("❌ Token address not found in message.")
-               return
-       else:
-           await query.message.reply_text("❌ Invalid callback format.")
-           return
+        if command == "ai_analyze":
+            # Format: ai_analyze|{full_token_address}|{timeframe}|{aggregate}
+            token_address = parts[1]
+            timeframe = parts[2]
+            aggregate = parts[3]
+        elif command == "ai":
+            # Format: ai|{short_address}|{timeframe}|{aggregate}
+            timeframe = parts[2]
+            aggregate = parts[3]
+            
+            # Extract full address from message caption
+            caption = query.message.caption or ""
+            import re
+            address_match = re.search(r'[A-Za-z0-9]{32,}', caption)
+            if address_match:
+                token_address = address_match.group()
+            else:
+                await query.message.reply_text("❌ Token address not found in message.")
+                return
+        else:
+            await query.message.reply_text("❌ Invalid callback format.")
+            return
 
-       # Find pool and create chart
-       search_url = f"https://api.geckoterminal.com/api/v2/search/pools?query={token_address}"
-       async with httpx.AsyncClient(timeout=30.0) as client:
-           response = await client.get(search_url)
-           if response.status_code != 200:
-               await query.message.reply_text("❌ Error finding token pool for AI analysis.")
-               return
+        # --- بخش کلیدی: ارسال تسک به Celery ---
+        ai_analysis_task.delay(
+            chat_id=query.message.chat_id,
+            message_id=query.message.message_id,
+            token_address=token_address,
+            timeframe=timeframe,
+            aggregate=aggregate
+        )
 
-           pools = response.json().get('data', [])
-           if not pools:
-               await query.message.reply_text("❌ Token pool not found.")
-               return
-
-           # Select best pool by volume
-           best_pool = pools[0]
-           max_volume = 0
-           for pool in pools:
-               try:
-                   volume = float(pool.get('attributes', {}).get('volume_usd', {}).get('h24', 0))
-                   if volume > max_volume:
-                       max_volume = volume
-                       best_pool = pool
-               except:
-                   continue
-
-           pool_id = best_pool['id']
-
-       # Generate chart
-       analysis_engine = AnalysisEngine()
-       analysis_result = await analysis_engine.perform_full_analysis(
-           pool_id, token_address, timeframe, aggregate, "AI Analysis"
-       )
-
-       if not analysis_result:
-           await query.message.reply_text("❌ Could not generate chart for AI analysis.")
-           return
-
-       chart_image = await analysis_engine.create_chart(analysis_result)
-       if not chart_image:
-           await query.message.reply_text("❌ Could not create chart image.")
-           return
-           
-       chart_image_bytes = chart_image.getvalue()
-
-       # Send to Gemini AI
-       ai_response = await ai_analyzer.analyze_chart_with_gemini(chart_image_bytes)
-
-       # Send response
-       await query.message.reply_text(text=ai_response, reply_to_message_id=query.message.message_id)
-
-       # Clean up loading message
-       if query.message.caption:
-           original_caption = query.message.caption.replace("\n\n⏳ در حال تحلیل با هوش مصنوعی...", "")
-           await query.edit_message_caption(caption=original_caption)
-
-   except (IndexError, ValueError) as e:
-       await query.message.reply_text("❌ Invalid callback data format.")
-   except Exception as e:
-       await query.message.reply_text(f"❌ An error occurred during AI analysis: {str(e)}")
-       # Clean up loading message on error
-       if query.message.caption and "⏳ در حال تحلیل" in query.message.caption:
-           try:
-               original_caption = query.message.caption.replace("\n\n⏳ در حال تحلیل با هوش مصنوعی...", "")
-               await query.edit_message_caption(caption=original_caption)
-           except:
-               pass
+    except (IndexError, ValueError) as e:
+        await query.message.reply_text("❌ Invalid callback data format.")
+    except Exception as e:
+        await query.message.reply_text(f"❌ An error occurred during AI analysis: {str(e)}")
 
 async def trending_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /trending command"""

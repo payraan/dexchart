@@ -126,7 +126,7 @@ async def chart_message_handler(update: Update, context: ContextTypes.DEFAULT_TY
     
     # Check subscription before processing
     user_id = update.effective_user.id
-    print(f"🔍 Subscription check: user_id={user_id}, subscription={subscription}")
+    #print(f"🔍 Subscription check: user_id={user_id}, subscription={subscription}")
     subscription = subscription_manager.check_subscription(user_id)
     
     if not subscription["active"]:

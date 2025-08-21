@@ -253,7 +253,7 @@ async def chart_button_callback(update: Update, context: ContextTypes.DEFAULT_TY
                                 keyboard = [[
                                     InlineKeyboardButton(
                                         "🧠 دریافت سیگنال هوش مصنوعی",
-                                        callback_data=f"ai_analyze|{token_address}|{timeframe}|{aggregate}"
+                                        callback_data=f"ai|{token_address[:8]}|{timeframe}|{aggregate}"
                                     )
                                 ]]
                                 reply_markup = InlineKeyboardMarkup(keyboard)
@@ -310,9 +310,17 @@ async def ai_analysis_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     try:
         # Parse callback data: ai_analyze_{token_address}_{timeframe}_{aggregate}
         parts = query.data.split('|')
-        token_address = parts[1]
+        command = parts[0]  # "ai"
+        token_address_short = parts[1]  # فقط 8 کاراکتر اول
         timeframe = parts[2] 
         aggregate = parts[3]
+
+        # استخراج آدرس کامل از caption پیام
+        caption = query.message.caption or ""
+        # آدرس کامل را از caption استخراج کنید
+        import re
+        full_address_match = re.search(r'[A-Za-z0-9]{32,}', caption)
+        token_address = full_address_match.group() if full_address_match else token_address_short
 
         # Find pool and create chart
         search_url = f"https://api.geckoterminal.com/api/v2/search/pools?query={token_address}"

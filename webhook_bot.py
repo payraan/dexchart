@@ -293,76 +293,114 @@ async def chart_button_callback(update: Update, context: ContextTypes.DEFAULT_TY
         print(f"❌ DEBUG: Full traceback:\n{traceback.format_exc()}")
 
 async def ai_analysis_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle AI analysis button click"""
-    query = update.callback_query
-    await query.answer()
+   """Handle AI analysis button click for both scan signals and manual charts"""
+   query = update.callback_query
+   await query.answer()
 
-    user_id = query.from_user.id
-    subscription = subscription_manager.check_subscription(user_id)
+   user_id = query.from_user.id
+   subscription = subscription_manager.check_subscription(user_id)
 
-    if not subscription:
-        await query.message.reply_text("⚠️ Access Denied. You need an active subscription for AI analysis.")
-        return
+   if not subscription:
+       await query.message.reply_text("⚠️ Access Denied. You need an active subscription for AI analysis.")
+       return
 
-    current_caption = query.message.caption or ""
-    await query.edit_message_caption(caption=current_caption + "\n\n⏳ در حال تحلیل با هوش مصنوعی...")
+   current_caption = query.message.caption or ""
+   await query.edit_message_caption(caption=current_caption + "\n\n⏳ در حال تحلیل با هوش مصنوعی...")
 
-    try:
-        # Parse callback data: ai_analyze_{token_address}_{timeframe}_{aggregate}
-        parts = query.data.split('|')
-        command = parts[0]  # "ai"
-        token_address_short = parts[1]  # فقط 8 کاراکتر اول
-        timeframe = parts[2] 
-        aggregate = parts[3]
+   try:
+       # Parse callback data for both formats
+       parts = query.data.split('|')
+       command = parts[0]
+       
+       if command == "ai_analyze":
+           # Format: ai_analyze|{full_token_address}|{timeframe}|{aggregate}
+           token_address = parts[1]
+           timeframe = parts[2]
+           aggregate = parts[3]
+       elif command == "ai":
+           # Format: ai|{short_address}|{timeframe}|{aggregate}
+           timeframe = parts[2]
+           aggregate = parts[3]
+           
+           # Extract full address from message caption
+           caption = query.message.caption or ""
+           import re
+           address_match = re.search(r'[A-Za-z0-9]{32,}', caption)
+           if address_match:
+               token_address = address_match.group()
+           else:
+               await query.message.reply_text("❌ Token address not found in message.")
+               return
+       else:
+           await query.message.reply_text("❌ Invalid callback format.")
+           return
 
-        # استخراج آدرس کامل از caption پیام
-        caption = query.message.caption or ""
-        # آدرس کامل را از caption استخراج کنید
-        import re
-        full_address_match = re.search(r'[A-Za-z0-9]{32,}', caption)
-        token_address = full_address_match.group() if full_address_match else token_address_short
+       # Find pool and create chart
+       search_url = f"https://api.geckoterminal.com/api/v2/search/pools?query={token_address}"
+       async with httpx.AsyncClient(timeout=30.0) as client:
+           response = await client.get(search_url)
+           if response.status_code != 200:
+               await query.message.reply_text("❌ Error finding token pool for AI analysis.")
+               return
 
-        # Find pool and create chart
-        search_url = f"https://api.geckoterminal.com/api/v2/search/pools?query={token_address}"
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(search_url)
-            if response.status_code != 200:
-                await query.message.reply_text("❌ Error finding token pool for AI analysis.")
-                return
+           pools = response.json().get('data', [])
+           if not pools:
+               await query.message.reply_text("❌ Token pool not found.")
+               return
 
-            pools = response.json().get('data', [])
-            if not pools:
-                await query.message.reply_text("❌ Token pool not found.")
-                return
+           # Select best pool by volume
+           best_pool = pools[0]
+           max_volume = 0
+           for pool in pools:
+               try:
+                   volume = float(pool.get('attributes', {}).get('volume_usd', {}).get('h24', 0))
+                   if volume > max_volume:
+                       max_volume = volume
+                       best_pool = pool
+               except:
+                   continue
 
-            pool_id = pools[0]['id']
+           pool_id = best_pool['id']
 
-        # Generate chart
-        analysis_engine = AnalysisEngine()
-        analysis_result = await analysis_engine.perform_full_analysis(
-            pool_id, token_address, timeframe, aggregate, "AI Analysis"
-        )
+       # Generate chart
+       analysis_engine = AnalysisEngine()
+       analysis_result = await analysis_engine.perform_full_analysis(
+           pool_id, token_address, timeframe, aggregate, "AI Analysis"
+       )
 
-        if not analysis_result:
-            await query.message.reply_text("❌ Could not generate chart for AI analysis.")
-            return
+       if not analysis_result:
+           await query.message.reply_text("❌ Could not generate chart for AI analysis.")
+           return
 
-        chart_image = await analysis_engine.create_chart(analysis_result)
-        chart_image_bytes = chart_image.getvalue()
+       chart_image = await analysis_engine.create_chart(analysis_result)
+       if not chart_image:
+           await query.message.reply_text("❌ Could not create chart image.")
+           return
+           
+       chart_image_bytes = chart_image.getvalue()
 
-        # Send to Gemini AI
-        ai_response = await ai_analyzer.analyze_chart_with_gemini(chart_image_bytes)
+       # Send to Gemini AI
+       ai_response = await ai_analyzer.analyze_chart_with_gemini(chart_image_bytes)
 
-        # Send response
-        await query.message.reply_text(text=ai_response, reply_to_message_id=query.message.message_id)
-        
-        # Clean up loading message
-        if query.message.caption:
-            original_caption = query.message.caption.replace("\n\n⏳ در حال تحلیل با هوش مصنوعی...", "")
-            await query.edit_message_caption(caption=original_caption)
+       # Send response
+       await query.message.reply_text(text=ai_response, reply_to_message_id=query.message.message_id)
 
-    except Exception as e:
-        await query.message.reply_text(f"An error occurred during AI analysis: {str(e)}")
+       # Clean up loading message
+       if query.message.caption:
+           original_caption = query.message.caption.replace("\n\n⏳ در حال تحلیل با هوش مصنوعی...", "")
+           await query.edit_message_caption(caption=original_caption)
+
+   except (IndexError, ValueError) as e:
+       await query.message.reply_text("❌ Invalid callback data format.")
+   except Exception as e:
+       await query.message.reply_text(f"❌ An error occurred during AI analysis: {str(e)}")
+       # Clean up loading message on error
+       if query.message.caption and "⏳ در حال تحلیل" in query.message.caption:
+           try:
+               original_caption = query.message.caption.replace("\n\n⏳ در حال تحلیل با هوش مصنوعی...", "")
+               await query.edit_message_caption(caption=original_caption)
+           except:
+               pass
 
 async def trending_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /trending command"""

@@ -291,10 +291,11 @@ async def ai_analysis_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     subscription = subscription_manager.check_subscription(user_id)
 
     if not subscription:
-        await query.edit_message_text(text="⚠️ Access Denied. You need an active subscription for AI analysis.")
+        await query.message.reply_text("⚠️ Access Denied. You need an active subscription for AI analysis.")
         return
 
-    await query.edit_message_caption(caption=query.message.caption + "\n\n⏳ در حال تحلیل با هوش مصنوعی...")
+    current_caption = query.message.caption or ""
+    await query.edit_message_caption(caption=current_caption + "\n\n⏳ در حال تحلیل با هوش مصنوعی...")
 
     try:
         # Parse callback data: ai_analyze_{token_address}_{timeframe}_{aggregate}
@@ -338,8 +339,9 @@ async def ai_analysis_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.message.reply_text(text=ai_response, reply_to_message_id=query.message.message_id)
         
         # Clean up loading message
-        original_caption = query.message.caption.replace("\n\n⏳ در حال تحلیل با هوش مصنوعی...", "")
-        await query.edit_message_caption(caption=original_caption)
+        if query.message.caption:
+            original_caption = query.message.caption.replace("\n\n⏳ در حال تحلیل با هوش مصنوعی...", "")
+            await query.edit_message_caption(caption=original_caption)
 
     except Exception as e:
         await query.message.reply_text(f"An error occurred during AI analysis: {str(e)}")

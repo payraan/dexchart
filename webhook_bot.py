@@ -249,9 +249,19 @@ async def chart_button_callback(update: Update, context: ContextTypes.DEFAULT_TY
                             print(f"🔍 DEBUG: Chart image exists: {chart_image is not None}")
                             
                             if chart_image:
+                                # Create AI analysis button
+                                keyboard = [[
+                                    InlineKeyboardButton(
+                                        "🧠 دریافت سیگنال هوش مصنوعی",
+                                        callback_data=f"ai_analyze|{token_address}|{timeframe}|{aggregate}"
+                                    )
+                                ]]
+                                reply_markup = InlineKeyboardMarkup(keyboard)
+
                                 await query.message.reply_photo(
                                     photo=chart_image,
-                                    caption=f"📊 {symbol} {display_name} Chart"
+                                    caption=f"📊 {symbol} {display_name} Chart",
+                                    reply_markup=reply_markup
                                 )
                                 print("✅ DEBUG: Chart sent successfully!")
                             else:

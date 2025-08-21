@@ -458,7 +458,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Add handlers
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chart_message_handler))
-application.add_handler(CallbackQueryHandler(ai_analysis_callback, pattern=r"^ai\|"")) # <-- اختصاصی (به اینجا منتقل شد)
+application.add_handler(CallbackQueryHandler(ai_analysis_callback, pattern=r"^ai\|")) # <-- اختصاصی (به اینجا منتقل شد)
 application.add_handler(CallbackQueryHandler(chart_button_callback)) # <-- عمومی
 application.add_handler(CommandHandler("start", start_command))
 application.add_handler(CommandHandler("trending", trending_command))

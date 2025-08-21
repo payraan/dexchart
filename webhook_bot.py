@@ -99,7 +99,7 @@ async def activate_subscription_command(update: Update, context: ContextTypes.DE
         parts = context.args
         target_user_id = int(parts[0])
         sub_type = parts[1] 
-        days = int(parts[1])
+        days = int(parts[2])
 
         subscription_manager.activate_subscription(
             user_id=target_user_id,

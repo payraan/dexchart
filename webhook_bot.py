@@ -290,7 +290,7 @@ async def ai_analysis_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     user_id = query.from_user.id
     subscription = subscription_manager.check_subscription(user_id)
 
-    if not subscription['active']:
+    if not subscription:
         await query.edit_message_text(text="⚠️ Access Denied. You need an active subscription for AI analysis.")
         return
 

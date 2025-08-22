@@ -10,4 +10,4 @@ if __name__ == "__main__":
     from tasks import celery_app
     
     # Start worker with concurrency=2 (adjust based on your Railway plan)
-    os.system("celery -A tasks worker --loglevel=info --concurrency=2")
+    os.system("celery -A tasks worker -P eventlet --loglevel=info --concurrency=10")

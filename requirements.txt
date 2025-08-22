@@ -13,3 +13,4 @@ python-dotenv==1.0.0
 aiohttp==3.9.5
 
 celery==5.4.0
+eventlet==0.33.3

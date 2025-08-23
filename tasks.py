@@ -1,14 +1,12 @@
-import os
 import asyncio
-from celery import Celery
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from config import Config
 from analysis_engine import AnalysisEngine
 from ai_analyzer import ai_analyzer
 import httpx
 
-# Initialize Celery app
-celery_app = Celery('tasks', broker=Config.REDIS_URL, backend=Config.REDIS_URL)
+# Import the pre-configured celery_app from our new central file
+from celery_app import celery_app
 
 # Initialize bot for tasks
 bot = Bot(token=Config.BOT_TOKEN)
@@ -26,7 +24,6 @@ async def async_generate_chart(chat_id: int, message_id: int, token_address: str
         analysis_engine = AnalysisEngine()
         display_name = f"{aggregate}{timeframe[0].upper()}"
         
-        # Find best pool
         search_url = f"https://api.geckoterminal.com/api/v2/search/pools?query={token_address}"
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(search_url)
@@ -39,7 +36,6 @@ async def async_generate_chart(chat_id: int, message_id: int, token_address: str
                 await bot.send_message(chat_id, "❌ Token not found", reply_to_message_id=message_id)
                 return "Pool not found"
         
-        # Select best pool by volume
         best_pool = pools[0]
         max_volume = 0
         for pool in pools:
@@ -53,7 +49,6 @@ async def async_generate_chart(chat_id: int, message_id: int, token_address: str
                 
         pool_id = best_pool['id']
         
-        # Extract symbol
         symbol = "Unknown"
         try:
             relationships = best_pool.get('relationships', {})
@@ -66,7 +61,6 @@ async def async_generate_chart(chat_id: int, message_id: int, token_address: str
         except:
             symbol = "Unknown"
         
-        # Generate analysis and chart
         analysis_result = await analysis_engine.perform_full_analysis(
             pool_id, token_address, timeframe, aggregate, symbol
         )
@@ -80,7 +74,6 @@ async def async_generate_chart(chat_id: int, message_id: int, token_address: str
             await bot.send_message(chat_id, "❌ Chart generation failed", reply_to_message_id=message_id)
             return "Chart generation failed"
         
-        # Send chart with AI button
         keyboard = [[
             InlineKeyboardButton(
                 "🧠 دریافت سیگنال هوش مصنوعی",
@@ -114,7 +107,6 @@ def ai_analysis_task(chat_id: int, message_id: int, token_address: str, timefram
 async def async_ai_analysis(chat_id: int, message_id: int, token_address: str, timeframe: str, aggregate: str):
     """Async AI analysis logic"""
     try:
-        # Find pool and generate chart for AI
         search_url = f"https://api.geckoterminal.com/api/v2/search/pools?query={token_address}"
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(search_url)
@@ -127,7 +119,6 @@ async def async_ai_analysis(chat_id: int, message_id: int, token_address: str, t
                 await bot.send_message(chat_id, "❌ Pool not found", reply_to_message_id=message_id)
                 return "Pool not found"
         
-        # Select best pool
         best_pool = pools[0]
         max_volume = 0
         for pool in pools:
@@ -141,7 +132,6 @@ async def async_ai_analysis(chat_id: int, message_id: int, token_address: str, t
                 
         pool_id = best_pool['id']
         
-        # Generate chart for AI analysis
         analysis_engine = AnalysisEngine()
         analysis_result = await analysis_engine.perform_full_analysis(
             pool_id, token_address, timeframe, aggregate, "AI Analysis"
@@ -156,11 +146,9 @@ async def async_ai_analysis(chat_id: int, message_id: int, token_address: str, t
             await bot.send_message(chat_id, "❌ Chart creation failed", reply_to_message_id=message_id)
             return "Chart creation failed"
             
-        # Send to AI
         chart_image_bytes = chart_image.getvalue()
         ai_response = await ai_analyzer.analyze_chart_with_gemini(chart_image_bytes)
         
-        # Send AI response
         await bot.send_message(
             chat_id=chat_id,
             text=ai_response,

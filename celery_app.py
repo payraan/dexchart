@@ -1,9 +1,17 @@
-import os
 from celery import Celery
 from config import Config
 
-# Define the Celery application from this central file
-celery_app = Celery('tasks', broker=Config.REDIS_URL, backend=Config.REDIS_URL)
+# Naming the app something unique and explicitly including the tasks module
+# is the most reliable way to configure Celery.
+celery_app = Celery('dexchart_worker',
+                  broker=Config.REDIS_URL,
+                  backend=Config.REDIS_URL,
+                  include=['tasks'])
 
-# Automatically discover and register tasks from the 'tasks.py' file
-celery_app.autodiscover_tasks(['tasks'])
+celery_app.conf.update(
+    task_serializer='json',
+    accept_content=['json'],
+    result_serializer='json',
+    timezone='UTC',
+    enable_utc=True,
+)

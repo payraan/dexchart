@@ -20,7 +20,146 @@ from database_manager import db_manager
 from subscription_manager import subscription_manager
 from ai_analyzer import ai_analyzer
 from analysis_engine import AnalysisEngine
-from tasks import generate_chart_task, ai_analysis_task
+from background_scanner import BackgroundScanner
+
+#<-- PASTE THE CODE BELOW THIS LINE -->
+
+async def async_generate_chart(chat_id: int, message_id: int, token_address: str, timeframe: str, aggregate: str):
+    """Async chart generation logic"""
+    try:
+        analysis_engine = AnalysisEngine()
+        display_name = f"{aggregate}{timeframe[0].upper()}"
+        
+        search_url = f"https://api.geckoterminal.com/api/v2/search/pools?query={token_address}"
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(search_url)
+            if response.status_code != 200:
+                await bot.send_message(chat_id, f"❌ API Error: {response.status_code}", reply_to_message_id=message_id)
+                return "API Error"
+                
+            pools = response.json().get('data', [])
+            if not pools:
+                await bot.send_message(chat_id, "❌ Token not found", reply_to_message_id=message_id)
+                return "Pool not found"
+        
+        best_pool = pools[0]
+        max_volume = 0
+        for pool in pools:
+            try:
+                volume = float(pool.get('attributes', {}).get('volume_usd', {}).get('h24', 0))
+                if volume > max_volume:
+                    max_volume = volume
+                    best_pool = pool
+            except:
+                continue
+                
+        pool_id = best_pool['id']
+        
+        symbol = "Unknown"
+        try:
+            relationships = best_pool.get('relationships', {})
+            base_token = relationships.get('base_token', {}).get('data', {})
+            if base_token:
+                symbol = base_token.get('id', '').split('_')[-1]
+            if symbol == "Unknown" or not symbol:
+                attributes = best_pool.get('attributes', {})
+                symbol = attributes.get('name', 'Unknown').split('/')[0]
+        except:
+            symbol = "Unknown"
+        
+        analysis_result = await analysis_engine.perform_full_analysis(
+            pool_id, token_address, timeframe, aggregate, symbol
+        )
+        
+        if not analysis_result:
+            await bot.send_message(chat_id, "❌ Analysis failed", reply_to_message_id=message_id)
+            return "Analysis failed"
+            
+        chart_image = await analysis_engine.create_chart(analysis_result)
+        if not chart_image:
+            await bot.send_message(chat_id, "❌ Chart generation failed", reply_to_message_id=message_id)
+            return "Chart generation failed"
+        
+        keyboard = [[
+            InlineKeyboardButton(
+                "🧠 دریافت سیگنال هوش مصنوعی",
+                callback_data=f"ai_analyze|{token_address}|{timeframe}|{aggregate}"
+            )
+        ]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await bot.send_photo(
+            chat_id=chat_id,
+            photo=chart_image,
+            caption=f"📊 {symbol} {display_name} Chart\nContract: `{token_address}`",
+            parse_mode='Markdown',
+            reply_markup=reply_markup
+        )
+        
+        return f"Chart for {symbol} sent successfully"
+        
+    except Exception as e:
+        print(f"ERROR in generate_chart_task: {e}")
+        await bot.send_message(chat_id, f"❌ Error: {e}", reply_to_message_id=message_id)
+        return str(e)
+
+async def async_ai_analysis(chat_id: int, message_id: int, token_address: str, timeframe: str, aggregate: str):
+    """Async AI analysis logic"""
+    try:
+        search_url = f"https://api.geckoterminal.com/api/v2/search/pools?query={token_address}"
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(search_url)
+            if response.status_code != 200:
+                await bot.send_message(chat_id, "❌ Token not found for AI analysis", reply_to_message_id=message_id)
+                return "Token not found"
+                
+            pools = response.json().get('data', [])
+            if not pools:
+                await bot.send_message(chat_id, "❌ Pool not found", reply_to_message_id=message_id)
+                return "Pool not found"
+        
+        best_pool = pools[0]
+        max_volume = 0
+        for pool in pools:
+            try:
+                volume = float(pool.get('attributes', {}).get('volume_usd', {}).get('h24', 0))
+                if volume > max_volume:
+                    max_volume = volume
+                    best_pool = pool
+            except:
+                continue
+                
+        pool_id = best_pool['id']
+        
+        analysis_engine = AnalysisEngine()
+        analysis_result = await analysis_engine.perform_full_analysis(
+            pool_id, token_address, timeframe, aggregate, "AI Analysis"
+        )
+        
+        if not analysis_result:
+            await bot.send_message(chat_id, "❌ Could not generate chart for AI", reply_to_message_id=message_id)
+            return "Analysis failed"
+            
+        chart_image = await analysis_engine.create_chart(analysis_result)
+        if not chart_image:
+            await bot.send_message(chat_id, "❌ Chart creation failed", reply_to_message_id=message_id)
+            return "Chart creation failed"
+            
+        chart_image_bytes = chart_image.getvalue()
+        ai_response = await ai_analyzer.analyze_chart_with_gemini(chart_image_bytes)
+        
+        await bot.send_message(
+            chat_id=chat_id,
+            text=ai_response,
+            reply_to_message_id=message_id
+        )
+        
+        return "AI analysis completed"
+        
+    except Exception as e:
+        print(f"ERROR in ai_analysis_task: {e}")
+        await bot.send_message(chat_id, f"❌ AI Analysis Error: {e}", reply_to_message_id=message_id)
+        return str(e)
 
 # Configuration
 BOT_TOKEN = Config.BOT_TOKEN
@@ -49,10 +188,27 @@ async def lifespan(app: FastAPI):
     await application.initialize()
     print("🤖 Telegram application initialized")
     
+    # --- کد جدید برای اجرای اسکنر ---
+    print("🔍 Initializing background scanner...")
+    scanner = BackgroundScanner(
+        bot_token=BOT_TOKEN,
+        chat_id=Config.CHAT_ID
+    )
+    # اسکنر را به عنوان یک تسک پس‌زمینه اجرا می‌کنیم
+    scanner_task = asyncio.create_task(scanner.start_scanning())
+    app.state.scanner_task = scanner_task
+    print("✅ Background scanner started as a separate task.")
+    # --- پایان کد جدید ---
+
     yield
     
     # Cleanup on shutdown
     print("🛑 Shutting down...")
+    # --- کد جدید برای توقف اسکنر ---
+    if scanner:
+        scanner.running = False
+        print("🛑 Scanner stop signal sent.")
+    # --- پایان کد جدید ---
     await application.shutdown()
     try:
         await bot.delete_webhook()
@@ -170,13 +326,15 @@ async def chart_button_callback(update: Update, context: ContextTypes.DEFAULT_TY
     except Exception as e:
         print(f"Info: Could not edit message text. Error: {e}")
     
-    # Queue the task to Celery worker
-    generate_chart_task.delay(
-        chat_id=query.message.chat_id,
-        message_id=query.message.message_id,
-        token_address=token_address,
-        timeframe=timeframe,
-        aggregate=aggregate
+    # کد جدید
+    asyncio.create_task(
+        async_generate_chart(
+            chat_id=query.message.chat_id,
+            message_id=query.message.message_id,
+            token_address=token_address,
+            timeframe=timeframe,
+            aggregate=aggregate
+        )
     )
 
 async def ai_analysis_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -224,13 +382,15 @@ async def ai_analysis_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             await query.message.reply_text("❌ Invalid callback format.")
             return
 
-        # --- بخش کلیدی: ارسال تسک به Celery ---
-        ai_analysis_task.delay(
-            chat_id=query.message.chat_id,
-            message_id=query.message.message_id,
-            token_address=token_address,
-            timeframe=timeframe,
-            aggregate=aggregate
+        # کد جدید
+        asyncio.create_task(
+            async_ai_analysis(
+                chat_id=query.message.chat_id,
+                message_id=query.message.message_id,
+                token_address=token_address,
+                timeframe=timeframe,
+                aggregate=aggregate
+            )
         )
 
     except (IndexError, ValueError) as e:

@@ -8,7 +8,6 @@ from strategy_engine import StrategyEngine
 from telegram import Bot
 from config import Config
 from database_manager import db_manager
-from holder_analyzer import HolderAnalyzer
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 class BackgroundScanner:
@@ -22,7 +21,6 @@ class BackgroundScanner:
         self.logger = logging.getLogger(__name__)
         self.last_scan_time = None
         self.scan_count = 0
-        self.holder_analyzer = HolderAnalyzer()
         self.health_checker = TokenHealthChecker()
         self.last_error = None
 
@@ -38,42 +36,6 @@ class BackgroundScanner:
            token_address = signal.get('token_address')
            analysis_result = signal.get('analysis_result')
            current_price = signal.get('current_price', 0)
-
-           # دریافت اطلاعات هولدر (قبل از ساخت پیام)
-           holder_info_text = ""
-           try:
-               # فقط برای سیگنال‌های مهم holder data بگیر
-               important_signals = ['GEM_', 'breakout', 'breakdown']
-               if any(signal_word in signal_type for signal_word in important_signals):
-                   holder_data = await self.holder_analyzer.get_holder_stats(token_address)
-                   self.logger.info(f"💎 Holder data fetched for important signal: {signal_type}")
-               else:
-                   holder_data = None
-                   self.logger.info(f"⏭️ Skipped holder data for: {signal_type}")
-               if holder_data:
-                   holder_parts = []
-                   
-                   # تعداد هولدرها
-                   if 'holder_count' in holder_data:
-                       holder_parts.append(f"👥 {holder_data['holder_count']:,}")
-                   
-                   # تغییرات
-                   if 'deltas' in holder_data:
-                       h1 = holder_data['deltas'].get('1hour', 0)
-                       if h1 != 0:
-                           emoji = "📈" if h1 > 0 else "📉"
-                           holder_parts.append(f"{emoji} 1h: {h1:+d}")
-                   
-                   # whale ها
-                   if 'breakdowns' in holder_data:
-                       whales = holder_data['breakdowns'].get('holders_over_100k_usd', 0)    
-                       if whales > 0:
-                           holder_parts.append(f"🐋 {whales}")
-                   
-                   if holder_parts:
-                       holder_info_text = "\n**Holders:** " + " | ".join(holder_parts)
-           except Exception as e:
-               self.logger.error(f"Error getting holder data: {e}")
 
            # ساخت پیام بر اساس نوع سیگنال
            if signal_type.startswith('GEM_'):

@@ -14,3 +14,4 @@ aiohttp==3.9.5
 
 celery==5.4.0
 eventlet==0.33.3
+honcho==1.1.0
